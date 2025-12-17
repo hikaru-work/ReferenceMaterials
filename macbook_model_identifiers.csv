@@ -1,0 +1,95 @@
+﻿Model Identifier,Prefix,Number1,Number2,Year,Model Name,Screen Size,Chip,CPU Type
+"Mac16,13",Mac,16,13,2025,"MacBook Air (15-inch, M4, 2025)",15-inch,M4,Apple Silicon
+"Mac16,12",Mac,16,12,2025,"MacBook Air (13-inch, M4, 2025)",13-inch,M4,Apple Silicon
+"Mac15,13",Mac,15,13,2024,"MacBook Air (15-inch, M3, 2024)",15-inch,M3,Apple Silicon
+"Mac15,12",Mac,15,12,2024,"MacBook Air (13-inch, M3, 2024)",13-inch,M3,Apple Silicon
+"Mac14,15",Mac,14,15,2023,"MacBook Air (15-inch, M2, 2023)",15-inch,M2,Apple Silicon
+"Mac14,2",Mac,14,2,2022,"MacBook Air (M2, 2022)",13-inch,M2,Apple Silicon
+"MacBookAir10,1",MacBookAir,10,1,2020,"MacBook Air (M1, 2020)",13-inch,M1,Apple Silicon
+"MacBookAir9,1",MacBookAir,9,1,2020,"MacBook Air (Retina, 13-inch, 2020)",13-inch,Intel Core i3/i5/i7,Intel
+"MacBookAir8,2",MacBookAir,8,2,2019,"MacBook Air (Retina, 13-inch, 2019)",13-inch,Intel Core i5,Intel
+"MacBookAir8,1",MacBookAir,8,1,2018,"MacBook Air (Retina, 13-inch, 2018)",13-inch,Intel Core i5,Intel
+"MacBookAir7,2",MacBookAir,7,2,2017,"MacBook Air (13-inch, 2017)",13-inch,Intel Core i5,Intel
+"MacBookAir7,2",MacBookAir,7,2,2015,"MacBook Air (13-inch, Early 2015)",13-inch,Intel Core i5/i7,Intel
+"MacBookAir7,1",MacBookAir,7,1,2015,"MacBook Air (11-inch, Early 2015)",11-inch,Intel Core i5/i7,Intel
+"MacBookAir6,2",MacBookAir,6,2,2014,"MacBook Air (13-inch, Early 2014)",13-inch,Intel Core i5/i7,Intel
+"MacBookAir6,1",MacBookAir,6,1,2014,"MacBook Air (11-inch, Early 2014)",11-inch,Intel Core i5/i7,Intel
+"MacBookAir6,2",MacBookAir,6,2,2013,"MacBook Air (13-inch, Mid 2013)",13-inch,Intel Core i5/i7,Intel
+"MacBookAir6,1",MacBookAir,6,1,2013,"MacBook Air (11-inch, Mid 2013)",11-inch,Intel Core i5/i7,Intel
+"MacBookAir5,2",MacBookAir,5,2,2012,"MacBook Air (13-inch, Mid 2012)",13-inch,Intel Core i5/i7,Intel
+"MacBookAir5,1",MacBookAir,5,1,2012,"MacBook Air (11-inch, Mid 2012)",11-inch,Intel Core i5/i7,Intel
+"MacBookAir4,2",MacBookAir,4,2,2011,"MacBook Air (13-inch, Mid 2011)",13-inch,Intel Core i5/i7,Intel
+"MacBookAir4,1",MacBookAir,4,1,2011,"MacBook Air (11-inch, Mid 2011)",11-inch,Intel Core i5/i7,Intel
+"MacBookAir3,2",MacBookAir,3,2,2010,"MacBook Air (13-inch, Late 2010)",13-inch,Intel Core 2 Duo,Intel
+"MacBookAir3,1",MacBookAir,3,1,2010,"MacBook Air (11-inch, Late 2010)",11-inch,Intel Core 2 Duo,Intel
+"MacBookAir2,1",MacBookAir,2,1,2009,MacBook Air (Mid 2009),13-inch,Intel Core 2 Duo,Intel
+"Mac17,2",Mac,17,2,2025,"MacBook Pro (14-inch, M5)",14-inch,M5,Apple Silicon
+"Mac16,1",Mac,16,1,2024,"MacBook Pro (14-inch, 2024)",14-inch,M4,Apple Silicon
+"Mac16,6",Mac,16,6,2024,"MacBook Pro (14-inch, 2024)",14-inch,M4 Pro/Max,Apple Silicon
+"Mac16,8",Mac,16,8,2024,"MacBook Pro (14-inch, 2024)",14-inch,M4 Pro/Max,Apple Silicon
+"Mac16,7",Mac,16,7,2024,"MacBook Pro (16-inch, 2024)",16-inch,M4 Pro/Max,Apple Silicon
+"Mac16,5",Mac,16,5,2024,"MacBook Pro (16-inch, 2024)",16-inch,M4 Pro/Max,Apple Silicon
+"Mac15,3",Mac,15,3,2023,"MacBook Pro (14-inch, Nov 2023)",14-inch,M3,Apple Silicon
+"Mac15,6",Mac,15,6,2023,"MacBook Pro (14-inch, Nov 2023)",14-inch,M3 Pro/Max,Apple Silicon
+"Mac15,8",Mac,15,8,2023,"MacBook Pro (14-inch, Nov 2023)",14-inch,M3 Pro/Max,Apple Silicon
+"Mac15,10",Mac,15,10,2023,"MacBook Pro (14-inch, Nov 2023)",14-inch,M3 Pro/Max,Apple Silicon
+"Mac15,7",Mac,15,7,2023,"MacBook Pro (16-inch, Nov 2023)",16-inch,M3 Pro/Max,Apple Silicon
+"Mac15,9",Mac,15,9,2023,"MacBook Pro (16-inch, Nov 2023)",16-inch,M3 Pro/Max,Apple Silicon
+"Mac15,11",Mac,15,11,2023,"MacBook Pro (16-inch, Nov 2023)",16-inch,M3 Pro/Max,Apple Silicon
+"Mac14,5",Mac,14,5,2023,"MacBook Pro (14-inch, 2023)",14-inch,M2 Pro/Max,Apple Silicon
+"Mac14,9",Mac,14,9,2023,"MacBook Pro (14-inch, 2023)",14-inch,M2 Pro/Max,Apple Silicon
+"Mac14,6",Mac,14,6,2023,"MacBook Pro (16-inch, 2023)",16-inch,M2 Pro/Max,Apple Silicon
+"Mac14,10",Mac,14,10,2023,"MacBook Pro (16-inch, 2023)",16-inch,M2 Pro/Max,Apple Silicon
+"Mac14,7",Mac,14,7,2022,"MacBook Pro (13-inch, M2, 2022)",13-inch,M2,Apple Silicon
+"MacBookPro18,3",MacBookPro,18,3,2021,"MacBook Pro (14-inch, 2021)",14-inch,M1 Pro/Max,Apple Silicon
+"MacBookPro18,4",MacBookPro,18,4,2021,"MacBook Pro (14-inch, 2021)",14-inch,M1 Pro/Max,Apple Silicon
+"MacBookPro18,1",MacBookPro,18,1,2021,"MacBook Pro (16-inch, 2021)",16-inch,M1 Pro/Max,Apple Silicon
+"MacBookPro18,2",MacBookPro,18,2,2021,"MacBook Pro (16-inch, 2021)",16-inch,M1 Pro/Max,Apple Silicon
+"MacBookPro17,1",MacBookPro,17,1,2020,"MacBook Pro (13-inch, M1, 2020)",13-inch,M1,Apple Silicon
+"MacBookPro16,3",MacBookPro,16,3,2020,"MacBook Pro (13-inch, 2020, Two Thunderbolt 3)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro16,2",MacBookPro,16,2,2020,"MacBook Pro (13-inch, 2020, Four Thunderbolt 3)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro16,1",MacBookPro,16,1,2019,"MacBook Pro (16-inch, 2019)",16-inch,Intel Core i7/i9,Intel
+"MacBookPro16,4",MacBookPro,16,4,2019,"MacBook Pro (16-inch, 2019)",16-inch,Intel Core i9,Intel
+"MacBookPro15,4",MacBookPro,15,4,2019,"MacBook Pro (13-inch, 2019, Two Thunderbolt 3)",13-inch,Intel Core i5,Intel
+"MacBookPro15,1",MacBookPro,15,1,2019,"MacBook Pro (15-inch, 2019)",15-inch,Intel Core i7/i9,Intel
+"MacBookPro15,3",MacBookPro,15,3,2019,"MacBook Pro (15-inch, 2019)",15-inch,Intel Core i9,Intel
+"MacBookPro15,2",MacBookPro,15,2,2019,"MacBook Pro (13-inch, 2019, Four Thunderbolt 3)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro15,1",MacBookPro,15,1,2018,"MacBook Pro (15-inch, 2018)",15-inch,Intel Core i7/i9,Intel
+"MacBookPro15,2",MacBookPro,15,2,2018,"MacBook Pro (13-inch, 2018, Four Thunderbolt 3)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro14,3",MacBookPro,14,3,2017,"MacBook Pro (15-inch, 2017)",15-inch,Intel Core i7,Intel
+"MacBookPro14,2",MacBookPro,14,2,2017,"MacBook Pro (13-inch, 2017, Four Thunderbolt 3)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro14,1",MacBookPro,14,1,2017,"MacBook Pro (13-inch, 2017, Two Thunderbolt 3)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro13,3",MacBookPro,13,3,2016,"MacBook Pro (15-inch, 2016)",15-inch,Intel Core i7,Intel
+"MacBookPro13,2",MacBookPro,13,2,2016,"MacBook Pro (13-inch, 2016, Four Thunderbolt 3)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro13,1",MacBookPro,13,1,2016,"MacBook Pro (13-inch, 2016, Two Thunderbolt 3)",13-inch,Intel Core i5,Intel
+"MacBookPro11,4",MacBookPro,11,4,2015,"MacBook Pro (Retina, 15-inch, Mid 2015)",15-inch,Intel Core i7,Intel
+"MacBookPro11,5",MacBookPro,11,5,2015,"MacBook Pro (Retina, 15-inch, Mid 2015)",15-inch,Intel Core i7,Intel
+"MacBookPro12,1",MacBookPro,12,1,2015,"MacBook Pro (Retina, 13-inch, Early 2015)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro11,2",MacBookPro,11,2,2014,"MacBook Pro (Retina, 15-inch, Mid 2014)",15-inch,Intel Core i7,Intel
+"MacBookPro11,3",MacBookPro,11,3,2014,"MacBook Pro (Retina, 15-inch, Mid 2014)",15-inch,Intel Core i7,Intel
+"MacBookPro11,1",MacBookPro,11,1,2014,"MacBook Pro (Retina, 13-inch, Mid 2014)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro11,2",MacBookPro,11,2,2013,"MacBook Pro (Retina, 15-inch, Late 2013)",15-inch,Intel Core i7,Intel
+"MacBookPro11,3",MacBookPro,11,3,2013,"MacBook Pro (Retina, 15-inch, Late 2013)",15-inch,Intel Core i7,Intel
+"MacBookPro11,1",MacBookPro,11,1,2013,"MacBook Pro (Retina, 13-inch, Late 2013)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro10,1",MacBookPro,10,1,2013,"MacBook Pro (Retina, 15-inch, Early 2013)",15-inch,Intel Core i7,Intel
+"MacBookPro10,2",MacBookPro,10,2,2013,"MacBook Pro (Retina, 13-inch, Early 2013)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro10,2",MacBookPro,10,2,2012,"MacBook Pro (Retina, 13-inch, Late 2012)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro10,1",MacBookPro,10,1,2012,"MacBook Pro (Retina, 15-inch, Mid 2012)",15-inch,Intel Core i7,Intel
+"MacBookPro9,1",MacBookPro,9,1,2012,"MacBook Pro (15-inch, Mid 2012)",15-inch,Intel Core i7,Intel
+"MacBookPro9,2",MacBookPro,9,2,2012,"MacBook Pro (13-inch, Mid 2012)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro8,3",MacBookPro,8,3,2011,"MacBook Pro (17-inch, Late 2011)",17-inch,Intel Core i7,Intel
+"MacBookPro8,2",MacBookPro,8,2,2011,"MacBook Pro (15-inch, Late 2011)",15-inch,Intel Core i7,Intel
+"MacBookPro8,1",MacBookPro,8,1,2011,"MacBook Pro (13-inch, Late 2011)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro8,3",MacBookPro,8,3,2011,"MacBook Pro (17-inch, Early 2011)",17-inch,Intel Core i7,Intel
+"MacBookPro8,2",MacBookPro,8,2,2011,"MacBook Pro (15-inch, Early 2011)",15-inch,Intel Core i5/i7,Intel
+"MacBookPro8,1",MacBookPro,8,1,2011,"MacBook Pro (13-inch, Early 2011)",13-inch,Intel Core i5/i7,Intel
+"MacBookPro6,1",MacBookPro,6,1,2010,"MacBook Pro (17-inch, Mid 2010)",17-inch,Intel Core i5/i7,Intel
+"MacBookPro6,2",MacBookPro,6,2,2010,"MacBook Pro (15-inch, Mid 2010)",15-inch,Intel Core i5/i7,Intel
+"MacBookPro7,1",MacBookPro,7,1,2010,"MacBook Pro (13-inch, Mid 2010)",13-inch,Intel Core 2 Duo,Intel
+"MacBookPro5,2",MacBookPro,5,2,2009,"MacBook Pro (17-inch, Mid 2009)",17-inch,Intel Core 2 Duo,Intel
+"MacBookPro5,3",MacBookPro,5,3,2009,"MacBook Pro (15-inch, Mid 2009)",15-inch,Intel Core 2 Duo,Intel
+"MacBookPro5,5",MacBookPro,5,5,2009,"MacBook Pro (13-inch, Mid 2009)",13-inch,Intel Core 2 Duo,Intel
+"MacBookPro5,2",MacBookPro,5,2,2009,"MacBook Pro (17-inch, Early 2009)",17-inch,Intel Core 2 Duo,Intel
+"MacBookPro5,1",MacBookPro,5,1,2008,"MacBook Pro (15-inch, Late 2008)",15-inch,Intel Core 2 Duo,Intel
+"MacBookPro4,1",MacBookPro,4,1,2008,"MacBook Pro (17-inch, Early 2008)",17-inch,Intel Core 2 Duo,Intel
+"MacBookPro4,1",MacBookPro,4,1,2008,"MacBook Pro (15-inch, Early 2008)",15-inch,Intel Core 2 Duo,Intel
