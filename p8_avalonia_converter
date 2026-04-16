@@ -1,0 +1,480 @@
+# Phase 8: プリセット編集画面
+
+## ゴール
+
+プリセットの新規作成・既存編集が GUI で完結する状態。
+除外条件の動的追加・削除を含む。
+
+-----
+
+## 8.1 編集画面の ViewModel
+
+```csharp
+// ViewModels/PresetEditorViewModel.cs
+using System.Collections.ObjectModel;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using CsvTool.App.Models;
+
+namespace CsvTool.App.ViewModels;
+
+public partial class PresetEditorViewModel : ViewModelBase
+{
+    private readonly Preset? _original; // null = 新規作成
+
+    public PresetEditorViewModel(Preset? preset = null)
+    {
+        _original = preset;
+        IsNewPreset = preset == null;
+        WindowTitle = IsNewPreset ? "プリセット新規作成" : "プリセット編集";
+
+        if (preset != null)
+        {
+            Name = preset.Name;
+            Description = preset.Description;
+            CategoryColumn = preset.CategoryColumn;
+            OutputFileNamePattern = preset.OutputFileNamePattern;
+            Filters = new ObservableCollection<FilterRuleViewModel>(
+                preset.Filters.Select(f => new FilterRuleViewModel(f)));
+        }
+    }
+
+    public bool IsNewPreset { get; }
+    public string WindowTitle { get; }
+
+    // 保存結果（View 側で取得する）
+    public Preset? Result { get; private set; }
+
+    // --- 編集対象プロパティ ---
+
+    [ObservableProperty]
+    private string _name = string.Empty;
+
+    [ObservableProperty]
+    private string _description = string.Empty;
+
+    [ObservableProperty]
+    private string _categoryColumn = string.Empty;
+
+    [ObservableProperty]
+    private string _outputFileNamePattern = "output_{category}.csv";
+
+    [ObservableProperty]
+    private ObservableCollection<FilterRuleViewModel> _filters = new();
+
+    // --- バリデーション ---
+
+    [ObservableProperty]
+    private string _nameError = string.Empty;
+
+    public bool HasErrors => !string.IsNullOrEmpty(NameError);
+
+    partial void OnNameChanged(string value)
+    {
+        NameError = string.IsNullOrWhiteSpace(value)
+            ? "名前は必須です"
+            : string.Empty;
+        SaveCommand.NotifyCanExecuteChanged();
+    }
+
+    public bool CanSave =>
+        !string.IsNullOrWhiteSpace(Name);
+
+    // --- コマンド ---
+
+    [RelayCommand]
+    private void AddFilter()
+    {
+        Filters.Add(new FilterRuleViewModel(
+            new FilterRule("", FilterOp.Equals, "")));
+    }
+
+    [RelayCommand]
+    private void RemoveFilter(FilterRuleViewModel filter)
+    {
+        Filters.Remove(filter);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSave))]
+    private void Save()
+    {
+        Result = new Preset
+        {
+            Id = _original?.Id ?? Guid.NewGuid().ToString("N")[..8],
+            SchemaVersion = _original?.SchemaVersion ?? 1,
+            Name = Name.Trim(),
+            Description = Description.Trim(),
+            CategoryColumn = CategoryColumn.Trim(),
+            OutputFileNamePattern = OutputFileNamePattern.Trim(),
+            Filters = Filters
+                .Select(f => new FilterRule(f.Column, f.Op, f.Value))
+                .ToList(),
+            CreatedAt = _original?.CreatedAt ?? DateTime.Now,
+            UpdatedAt = DateTime.Now,
+        };
+
+        // View 側で Close を呼ぶ（Result が non-null なら保存成功）
+    }
+}
+```
+
+-----
+
+## 8.2 FilterRuleViewModel
+
+フィルタ条件 1 行分の ViewModel:
+
+```csharp
+// ViewModels/FilterRuleViewModel.cs
+using CommunityToolkit.Mvvm.ComponentModel;
+using CsvTool.App.Models;
+
+namespace CsvTool.App.ViewModels;
+
+public partial class FilterRuleViewModel : ViewModelBase
+{
+    public FilterRuleViewModel(FilterRule rule)
+    {
+        _column = rule.Column;
+        _op = rule.Op;
+        _value = rule.Value;
+    }
+
+    [ObservableProperty]
+    private string _column;
+
+    [ObservableProperty]
+    private FilterOp _op;
+
+    [ObservableProperty]
+    private string _value;
+
+    /// <summary>
+    /// ComboBox の ItemsSource 用
+    /// </summary>
+    public static IReadOnlyList<FilterOpItem> AvailableOps { get; } = new[]
+    {
+        new FilterOpItem(FilterOp.Equals,      "等しい"),
+        new FilterOpItem(FilterOp.NotEquals,    "等しくない"),
+        new FilterOpItem(FilterOp.Contains,     "含む"),
+        new FilterOpItem(FilterOp.NotContains,  "含まない"),
+        new FilterOpItem(FilterOp.LessThan,     "未満"),
+        new FilterOpItem(FilterOp.IsEmpty,      "空である"),
+    };
+}
+
+public record FilterOpItem(FilterOp Value, string DisplayName);
+```
+
+-----
+
+## 8.3 編集画面の View（AXAML）
+
+```xml
+<!-- Views/PresetEditorWindow.axaml -->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:CsvTool.App.ViewModels"
+        x:Class="CsvTool.App.Views.PresetEditorWindow"
+        x:DataType="vm:PresetEditorViewModel"
+        Title="{Binding WindowTitle}"
+        Width="650" Height="550"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+    <DockPanel Margin="20">
+
+        <!-- 下部: ボタン -->
+        <StackPanel DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,16,0,0">
+            <Button Content="キャンセル"
+                    Padding="16,6"
+                    Name="CancelButton" />
+            <Button Content="保存"
+                    Command="{Binding SaveCommand}"
+                    Padding="16,6"
+                    Background="#2563EB"
+                    Foreground="White"
+                    Name="SaveButton" />
+        </StackPanel>
+
+        <!-- メインフォーム -->
+        <ScrollViewer>
+            <StackPanel Spacing="12">
+
+                <!-- 名前 -->
+                <StackPanel Spacing="4">
+                    <StackPanel Orientation="Horizontal" Spacing="2">
+                        <TextBlock Text="名前" FontSize="12"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="*" Foreground="#EF4444"
+                                   FontSize="12" />
+                    </StackPanel>
+                    <TextBox Text="{Binding Name}"
+                             Watermark="プリセットの名前を入力" />
+                    <TextBlock Text="{Binding NameError}"
+                               FontSize="11"
+                               Foreground="#EF4444"
+                               IsVisible="{Binding NameError,
+                                   Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+
+                <!-- 説明 -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="説明" FontSize="12"
+                               FontWeight="SemiBold" />
+                    <TextBox Text="{Binding Description}"
+                             Watermark="このプリセットの用途を記述"
+                             AcceptsReturn="True"
+                             Height="60"
+                             TextWrapping="Wrap" />
+                </StackPanel>
+
+                <!-- 分類列 + 出力パターン -->
+                <Grid ColumnDefinitions="*,16,*">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="分類列" FontSize="12"
+                                   FontWeight="SemiBold" />
+                        <TextBox Text="{Binding CategoryColumn}"
+                                 Watermark="例: category" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Spacing="4">
+                        <TextBlock Text="出力ファイル名パターン" FontSize="12"
+                                   FontWeight="SemiBold" />
+                        <TextBox Text="{Binding OutputFileNamePattern}"
+                                 Watermark="例: output_{category}.csv"
+                                 FontFamily="Consolas,monospace" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- パターン説明 -->
+                <TextBlock Text="{}{category} は分類列の値に置換されます"
+                           FontSize="11"
+                           Foreground="#A3A3A3"
+                           Margin="0,-8,0,0" />
+
+                <!-- 除外条件 -->
+                <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="除外条件"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                        <Button Grid.Column="1"
+                                Content="+ 追加"
+                                Command="{Binding AddFilterCommand}"
+                                Padding="10,4"
+                                FontSize="12" />
+                    </Grid>
+
+                    <!-- フィルタ一覧 -->
+                    <ItemsControl ItemsSource="{Binding Filters}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:FilterRuleViewModel">
+                                <Grid ColumnDefinitions="*,Auto,*,Auto"
+                                      Margin="0,0,0,6">
+                                    <!-- 列名 -->
+                                    <TextBox Grid.Column="0"
+                                             Text="{Binding Column}"
+                                             Watermark="列名"
+                                             Margin="0,0,4,0" />
+                                    <!-- 演算子 -->
+                                    <ComboBox Grid.Column="1"
+                                              ItemsSource="{x:Static vm:FilterRuleViewModel.AvailableOps}"
+                                              SelectedValue="{Binding Op}"
+                                              SelectedValueBinding="{Binding Value}"
+                                              DisplayMemberBinding="{Binding DisplayName}"
+                                              Width="120"
+                                              Margin="0,0,4,0" />
+                                    <!-- 値 -->
+                                    <TextBox Grid.Column="2"
+                                             Text="{Binding Value}"
+                                             Watermark="値"
+                                             Margin="0,0,4,0" />
+                                    <!-- 削除 -->
+                                    <Button Grid.Column="3"
+                                            Content="✕"
+                                            Command="{Binding #root.((vm:PresetEditorViewModel)DataContext).RemoveFilterCommand}"
+                                            CommandParameter="{Binding}"
+                                            Padding="8,4"
+                                            FontSize="11" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- フィルタが0件の場合 -->
+                    <TextBlock Text="除外条件なし（すべての行を出力します）"
+                               FontSize="12"
+                               Foreground="#A3A3A3"
+                               FontStyle="Italic"
+                               IsVisible="{Binding !Filters.Count}" />
+                </StackPanel>
+
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+
+</Window>
+```
+
+-----
+
+## 8.4 編集画面のコードビハインド
+
+```csharp
+// Views/PresetEditorWindow.axaml.cs
+using Avalonia.Controls;
+using CsvTool.App.ViewModels;
+
+namespace CsvTool.App.Views;
+
+public partial class PresetEditorWindow : Window
+{
+    public PresetEditorWindow()
+    {
+        InitializeComponent();
+
+        CancelButton.Click += (_, _) => Close();
+
+        SaveButton.Click += (_, _) =>
+        {
+            if (DataContext is PresetEditorViewModel vm && vm.Result != null)
+            {
+                Close(vm.Result);
+            }
+        };
+    }
+}
+```
+
+> `Close(result)` で結果を返す。
+> 呼び出し元は `ShowDialog<Preset?>()` で受け取る。
+
+-----
+
+## 8.5 管理画面から編集画面を呼び出す
+
+`PresetManagementWindow.axaml.cs` に「新規」「編集」ボタンの処理を追加:
+
+```csharp
+// PresetManagementWindow.axaml.cs に追加
+
+// 新規ボタン（Name="NewButton" を AXAML で設定）
+NewButton.Click += async (_, _) =>
+{
+    var editorVm = new PresetEditorViewModel();
+    var editor = new PresetEditorWindow { DataContext = editorVm };
+
+    var result = await editor.ShowDialog<Preset?>(this);
+
+    if (result != null && DataContext is PresetManagementViewModel vm)
+    {
+        var repo = App.Services.GetRequiredService<IPresetRepository>();
+        repo.Save(result);
+        vm.LoadPresets();
+    }
+};
+
+// 編集ボタン（Name="EditButton" を AXAML で設定）
+EditButton.Click += async (_, _) =>
+{
+    if (DataContext is not PresetManagementViewModel vm) return;
+    if (vm.SelectedPresets.Count != 1) return;
+
+    var editorVm = new PresetEditorViewModel(vm.SelectedPresets[0]);
+    var editor = new PresetEditorWindow { DataContext = editorVm };
+
+    var result = await editor.ShowDialog<Preset?>(this);
+
+    if (result != null)
+    {
+        var repo = App.Services.GetRequiredService<IPresetRepository>();
+        repo.Save(result);
+        vm.LoadPresets();
+    }
+};
+```
+
+> `ShowDialog<T>()` は Avalonia のモーダル呼び出し。
+> ジェネリック引数で Close 時の戻り値の型を指定する。
+
+-----
+
+## 8.6 ComboBox のバインディング補足
+
+`FilterOp` の ComboBox バインディングが複雑になりやすいポイント。
+うまく動かない場合は、以下のシンプルな方法に切り替える:
+
+```xml
+<!-- シンプル版: SelectedItem で FilterOpItem を直接バインド -->
+<ComboBox ItemsSource="{x:Static vm:FilterRuleViewModel.AvailableOps}"
+          DisplayMemberBinding="{Binding DisplayName}">
+    <!-- SelectedItem を FilterOpItem にバインドし、
+         ViewModel 側で FilterOpItem.Value を参照 -->
+</ComboBox>
+```
+
+もしくは `FilterRuleViewModel` で `Op` プロパティの代わりに
+`SelectedOpItem` プロパティを持たせる方法もある:
+
+```csharp
+[ObservableProperty]
+private FilterOpItem _selectedOp;
+
+partial void OnSelectedOpChanged(FilterOpItem value)
+{
+    _op = value.Value;
+}
+```
+
+> ComboBox の enum バインディングは Avalonia でつまずきやすい箇所。
+> 動く方法が見つかったらそれで進める。
+
+-----
+
+## 8.7 動作確認
+
+```bash
+dotnet run
+```
+
+1. 管理画面 →「新規」→ 編集画面が開く
+1. 名前を空にすると「名前は必須です」エラーが表示される
+1. 名前を入力するとエラーが消え、保存ボタンが有効になる
+1. 除外条件を追加・削除できる
+1. 保存 → 管理画面の一覧に反映される
+1. 既存プリセットを選択して「編集」→ 値が入った状態で開く
+1. 編集して保存 → 変更が反映される
+1. キャンセル → 変更は破棄される
+
+-----
+
+## 8.8 Git コミット
+
+```bash
+git add .
+git commit -m "Phase 8: プリセット編集画面（新規作成・編集・バリデーション）"
+```
+
+-----
+
+## 動作確認チェックリスト
+
+- [ ] 「新規」で空のフォームが開く
+- [ ] 「編集」で既存データが入ったフォームが開く
+- [ ] 名前未入力時にバリデーションエラーが出る
+- [ ] 除外条件の追加・削除が動く
+- [ ] 演算子の ComboBox が正しく動作する
+- [ ] 保存で管理画面に反映される
+- [ ] キャンセルで変更が破棄される
+- [ ] JSON ファイルの内容が正しい
+
+-----
+
+## 次のフェーズへ
+
+Phase 9 ではプリセットのインポート・エクスポート機能を実装する。
