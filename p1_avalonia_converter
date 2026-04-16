@@ -1,0 +1,197 @@
+# Phase 1: 環境構築 + プロジェクト作成
+
+## ゴール
+
+空の Avalonia アプリが `dotnet run` で起動し、ウィンドウが表示される状態。
+
+-----
+
+## 1.1 前提条件の確認
+
+### .NET 9 SDK
+
+```bash
+dotnet --version
+# 9.x.x が出ればOK
+```
+
+未インストールの場合: https://dotnet.microsoft.com/download/dotnet/9.0
+
+### エディタ
+
+以下のいずれか:
+
+- **JetBrains Rider**（推奨。Avalonia XAML プレビュー対応。個人無償ライセンスあり）
+- **VS Code + C# Dev Kit**（無料。XAML プレビューは弱いが実用可能）
+
+-----
+
+## 1.2 Avalonia テンプレートのインストール
+
+```bash
+dotnet new install Avalonia.Templates
+```
+
+インストール確認:
+
+```bash
+dotnet new list avalonia
+```
+
+`avalonia.app`, `avalonia.mvvm` 等が表示されれば OK。
+
+-----
+
+## 1.3 プロジェクト作成
+
+```bash
+# 作業ディレクトリを作成
+mkdir CsvTool && cd CsvTool
+
+# ソリューション作成
+dotnet new sln -n CsvTool
+
+# Avalonia MVVM アプリプロジェクト作成
+dotnet new avalonia.mvvm -n CsvTool.App
+
+# ソリューションにプロジェクトを追加
+dotnet sln add CsvTool.App/CsvTool.App.csproj
+```
+
+> **なぜ `avalonia.mvvm` テンプレートを使うか**:
+> `avalonia.app` は最小テンプレートで MVVM の雛形がない。
+> `avalonia.mvvm` は `ViewModels/`, `Views/` フォルダ構成と
+> `ViewModelBase`, `MainWindowViewModel` が最初から用意される。
+
+-----
+
+## 1.4 NuGet パッケージ追加
+
+```bash
+cd CsvTool.App
+
+# MVVM (ソースジェネレーター付き)
+dotnet add package CommunityToolkit.Mvvm
+
+# DI コンテナ
+dotnet add package Microsoft.Extensions.DependencyInjection
+
+# CSV パーサ（高速）
+dotnet add package Sep
+
+# JSON シリアライズ（.NET 9 に標準で入っているが念のため確認）
+# System.Text.Json は追加不要（SDK に同梱済み）
+
+cd ..
+```
+
+### パッケージの役割
+
+|パッケージ                                     |用途                                                                       |
+|------------------------------------------|-------------------------------------------------------------------------|
+|`CommunityToolkit.Mvvm`                   |`[ObservableProperty]`, `[RelayCommand]` 等のソースジェネレーター。MVVM のボイラープレートを大幅削減|
+|`Microsoft.Extensions.DependencyInjection`|ViewModel / Service の DI。テスト容易性の確保                                       |
+|`Sep`                                     |高速 CSV パーサ。Rust 製 Polars と同等以上の速度                                        |
+
+-----
+
+## 1.5 フォルダ構成の確認
+
+テンプレートが生成した構成を確認する:
+
+```
+CsvTool/
+├── CsvTool.sln
+└── CsvTool.App/
+    ├── CsvTool.App.csproj
+    ├── App.axaml
+    ├── App.axaml.cs
+    ├── ViewModels/
+    │   ├── ViewModelBase.cs
+    │   └── MainWindowViewModel.cs
+    └── Views/
+        ├── MainWindow.axaml
+        └── MainWindow.axaml.cs
+```
+
+以下のフォルダを手動で追加:
+
+```bash
+cd CsvTool.App
+mkdir Models
+mkdir Services
+```
+
+最終的な構成:
+
+```
+CsvTool.App/
+├── Models/          ← データモデル（Preset, FilterRule 等）
+├── ViewModels/      ← MVVM の ViewModel
+├── Views/           ← AXAML + コードビハインド
+├── Services/        ← CSV処理、プリセット永続化等のロジック
+├── App.axaml
+├── App.axaml.cs
+└── CsvTool.App.csproj
+```
+
+-----
+
+## 1.6 起動確認
+
+```bash
+cd CsvTool/CsvTool.App
+dotnet run
+```
+
+空のウィンドウに「Welcome to Avalonia!」的なテキストが表示されれば成功。
+
+-----
+
+## 1.7 .gitignore と初回コミット
+
+```bash
+cd CsvTool
+dotnet new gitignore
+git init
+git add .
+git commit -m "Phase 1: Avalonia MVVM プロジェクト初期化"
+```
+
+-----
+
+## 1.8 csproj の推奨設定
+
+`CsvTool.App.csproj` を開き、以下を確認・追加:
+
+```xml
+<PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- AOT を見据えて CompiledBindings をデフォルト有効化 -->
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+</PropertyGroup>
+```
+
+> `AvaloniaUseCompiledBindingsByDefault` を最初から有効にしておくと、
+> Phase 2 以降で `x:DataType` 指定が必要になるが、
+> AOT 発行時のトラブルを未然に防げる。
+
+-----
+
+## 動作確認チェックリスト
+
+- [ ] `dotnet --version` で 9.x.x が出る
+- [ ] `dotnet new list avalonia` でテンプレートが見える
+- [ ] `dotnet run` でウィンドウが表示される
+- [ ] `Models/`, `Services/` フォルダが存在する
+- [ ] NuGet パッケージ 3 つが追加されている（`dotnet list package` で確認）
+- [ ] Git 初回コミット済み
+
+-----
+
+## 次のフェーズへ
+
+Phase 2 では MVVM の土台を作り、ViewModel ↔ View のバインディングを確認する。
