@@ -1,0 +1,416 @@
+# Phase 6: プリセットのデータモデル + JSON 永続化
+
+## ゴール
+
+プリセットを JSON ファイルで保存・読込でき、メイン画面のドロップダウンで選択すると
+フィルタ・分類列が切り替わる状態。
+
+-----
+
+## 6.1 プリセットモデル
+
+```csharp
+// Models/Preset.cs
+using System.Text.Json.Serialization;
+
+namespace CsvTool.App.Models;
+
+public class Preset
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8];
+    public int SchemaVersion { get; set; } = 1;
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string CategoryColumn { get; set; } = string.Empty;
+    public List<FilterRule> Filters { get; set; } = new();
+    public string OutputFileNamePattern { get; set; } = "output_{category}.csv";
+    public DateTime CreatedAt { get; set; } = DateTime.Now;
+    public DateTime UpdatedAt { get; set; } = DateTime.Now;
+}
+```
+
+> **`record` ではなく `class` にする理由**:
+> `System.Text.Json` でデシリアライズする際、ミュータブルの方が扱いやすい。
+> `[ObservableProperty]` との組み合わせも素直。
+
+-----
+
+## 6.2 FilterRule の JSON 対応
+
+Phase 4 で `record` として定義した `FilterRule` はそのままで OK。
+`FilterOp` の enum も `System.Text.Json` はデフォルトで文字列に変換される
+（`JsonStringEnumConverter` を設定する）:
+
+```csharp
+// Models/FilterRule.cs（変更なし。再掲）
+namespace CsvTool.App.Models;
+
+public enum FilterOp
+{
+    Equals,
+    NotEquals,
+    Contains,
+    NotContains,
+    LessThan,
+    IsEmpty
+}
+
+public record FilterRule(
+    string Column,
+    FilterOp Op,
+    string Value);
+```
+
+-----
+
+## 6.3 プリセットリポジトリ
+
+```csharp
+// Services/IPresetRepository.cs
+using CsvTool.App.Models;
+
+namespace CsvTool.App.Services;
+
+public interface IPresetRepository
+{
+    IReadOnlyList<Preset> GetAll();
+    Preset? GetById(string id);
+    void Save(Preset preset);
+    void Delete(string id);
+    void Reload();
+}
+```
+
+```csharp
+// Services/PresetRepository.cs
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using CsvTool.App.Models;
+
+namespace CsvTool.App.Services;
+
+public class PresetRepository : IPresetRepository
+{
+    private readonly string _presetsDir;
+    private readonly List<Preset> _presets = new();
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter() }
+    };
+
+    public PresetRepository()
+    {
+        var appData = Environment.GetFolderPath(
+            Environment.SpecialFolder.ApplicationData);
+        _presetsDir = Path.Combine(appData, "CsvTool", "presets");
+        Directory.CreateDirectory(_presetsDir);
+        Reload();
+    }
+
+    public IReadOnlyList<Preset> GetAll() => _presets.AsReadOnly();
+
+    public Preset? GetById(string id) =>
+        _presets.FirstOrDefault(p => p.Id == id);
+
+    public void Save(Preset preset)
+    {
+        preset.UpdatedAt = DateTime.Now;
+        var path = GetFilePath(preset.Id);
+        var json = JsonSerializer.Serialize(preset, JsonOptions);
+        File.WriteAllText(path, json);
+
+        // メモリ上のリストも更新
+        var idx = _presets.FindIndex(p => p.Id == preset.Id);
+        if (idx >= 0)
+            _presets[idx] = preset;
+        else
+            _presets.Add(preset);
+    }
+
+    public void Delete(string id)
+    {
+        var path = GetFilePath(id);
+        if (File.Exists(path))
+            File.Delete(path);
+
+        _presets.RemoveAll(p => p.Id == id);
+    }
+
+    public void Reload()
+    {
+        _presets.Clear();
+
+        if (!Directory.Exists(_presetsDir)) return;
+
+        foreach (var file in Directory.GetFiles(_presetsDir, "*.json"))
+        {
+            try
+            {
+                var json = File.ReadAllText(file);
+                var preset = JsonSerializer.Deserialize<Preset>(
+                    json, JsonOptions);
+
+                if (preset == null) continue;
+
+                // スキーマバージョンチェック
+                if (preset.SchemaVersion > 1)
+                {
+                    // 将来のバージョン。読み込むが警告を出す余地を残す
+                }
+
+                _presets.Add(preset);
+            }
+            catch (JsonException)
+            {
+                // 壊れたファイルはスキップ
+            }
+        }
+
+        // 名前順にソート
+        _presets.Sort((a, b) =>
+            string.Compare(a.Name, b.Name, StringComparison.Ordinal));
+    }
+
+    private string GetFilePath(string id) =>
+        Path.Combine(_presetsDir, $"{id}.json");
+}
+```
+
+-----
+
+## 6.4 出力される JSON の例
+
+```json
+{
+  "id": "a1b2c3d4",
+  "schemaVersion": 1,
+  "name": "2026Q1 売上データ分類",
+  "description": "月次売上CSVから削除済みを除外し、地域別に分割",
+  "categoryColumn": "region",
+  "filters": [
+    {
+      "column": "status",
+      "op": "Equals",
+      "value": "削除済み"
+    },
+    {
+      "column": "amount",
+      "op": "LessThan",
+      "value": "0"
+    }
+  ],
+  "outputFileNamePattern": "sales_{category}.csv",
+  "createdAt": "2026-04-17T10:00:00",
+  "updatedAt": "2026-04-17T10:00:00"
+}
+```
+
+-----
+
+## 6.5 保存場所
+
+|OS     |パス                                              |
+|-------|------------------------------------------------|
+|Windows|`%APPDATA%\CsvTool\presets\`                    |
+|Mac    |`~/Library/Application Support/CsvTool/presets/`|
+|Linux  |`~/.config/CsvTool/presets/`                    |
+
+`Environment.SpecialFolder.ApplicationData` で自動的に OS 別のパスが返される。
+
+-----
+
+## 6.6 DI 登録
+
+```csharp
+// App.axaml.cs の ConfigureServices に追加
+services.AddSingleton<IPresetRepository, PresetRepository>();
+```
+
+-----
+
+## 6.7 MainWindowViewModel のプリセット対応
+
+ハードコードのフィルタを削除し、プリセットから取得するように変更:
+
+```csharp
+// MainWindowViewModel.cs に追加・変更
+
+private readonly IPresetRepository _presetRepository;
+
+public MainWindowViewModel(
+    ICsvProcessor csvProcessor,
+    IPresetRepository presetRepository)
+{
+    _csvProcessor = csvProcessor;
+    _presetRepository = presetRepository;
+    LoadPresets();
+}
+
+// プリセット一覧
+[ObservableProperty]
+private ObservableCollection<Preset> _presets = new();
+
+[ObservableProperty]
+private Preset? _selectedPreset;
+
+partial void OnSelectedPresetChanged(Preset? value)
+{
+    StatusText = value != null
+        ? $"プリセット: {value.Name}"
+        : "プリセット未選択";
+}
+
+private void LoadPresets()
+{
+    Presets = new ObservableCollection<Preset>(
+        _presetRepository.GetAll());
+
+    if (Presets.Count > 0)
+        SelectedPreset = Presets[0];
+}
+
+// Execute コマンドの request 生成部分を変更
+// （ハードコード → SelectedPreset から取得）
+[RelayCommand(CanExecute = nameof(CanExecute))]
+private async Task Execute()
+{
+    if (SelectedPreset == null) return;
+
+    // ... 既存のコード ...
+
+    var request = new ProcessRequest(
+        InputPath: InputPath,
+        OutputDir: OutputPath,
+        CategoryColumn: SelectedPreset.CategoryColumn,
+        Filters: SelectedPreset.Filters,
+        OutputFileNamePattern: SelectedPreset.OutputFileNamePattern);
+
+    // ... 既存の処理コード ...
+}
+```
+
+-----
+
+## 6.8 メイン画面の AXAML 変更
+
+プリセット表示部分を `ComboBox` に差し替える:
+
+```xml
+<!-- プリセット選択（Phase 3 の TextBlock を差し替え） -->
+<Grid ColumnDefinitions="*,Auto">
+    <ComboBox Grid.Column="0"
+              ItemsSource="{Binding Presets}"
+              SelectedItem="{Binding SelectedPreset}"
+              FontSize="13"
+              HorizontalAlignment="Stretch">
+        <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="models:Preset">
+                <TextBlock Text="{Binding Name}" />
+            </DataTemplate>
+        </ComboBox.ItemTemplate>
+    </ComboBox>
+    <Button Grid.Column="1"
+            Content="管理..."
+            Margin="8,0,0,0"
+            Padding="12,6" />
+</Grid>
+
+<!-- プリセット詳細表示 -->
+<Border Background="White"
+        BorderBrush="#DBEAFE"
+        BorderThickness="1"
+        CornerRadius="4"
+        Padding="10"
+        IsVisible="{Binding SelectedPreset, Converter={x:Static ObjectConverters.IsNotNull}}">
+    <StackPanel Spacing="4">
+        <TextBlock Text="{Binding SelectedPreset.Description}"
+                   FontSize="12"
+                   Foreground="#737373" />
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <TextBlock FontSize="11">
+                <Run Text="分類列: " Foreground="#A3A3A3" />
+                <Run Text="{Binding SelectedPreset.CategoryColumn}" />
+            </TextBlock>
+            <TextBlock FontSize="11">
+                <Run Text="除外条件: " Foreground="#A3A3A3" />
+                <Run Text="{Binding SelectedPreset.Filters.Count}" />
+                <Run Text="件" />
+            </TextBlock>
+        </StackPanel>
+    </StackPanel>
+</Border>
+```
+
+-----
+
+## 6.9 初回起動時のサンプルプリセット作成
+
+プリセットが 0 件の場合にサンプルを自動生成:
+
+```csharp
+// PresetRepository.cs の Reload() の末尾に追加
+if (_presets.Count == 0)
+{
+    CreateSamplePresets();
+}
+
+private void CreateSamplePresets()
+{
+    var sample = new Preset
+    {
+        Name = "サンプル: ステータス別分類",
+        Description = "「削除済み」を除外し、カテゴリ列の値で分割するサンプル",
+        CategoryColumn = "category",
+        Filters = new List<FilterRule>
+        {
+            new("status", FilterOp.Equals, "削除済み")
+        },
+        OutputFileNamePattern = "data_{category}.csv"
+    };
+    Save(sample);
+}
+```
+
+-----
+
+## 6.10 動作確認
+
+```bash
+dotnet run
+```
+
+1. 初回起動でサンプルプリセットが生成される
+1. `%APPDATA%\CsvTool\presets\` に JSON ファイルが存在する
+1. ComboBox でプリセットが選択できる
+1. 選択に応じてプリセット詳細（説明・分類列・条件数）が切り替わる
+1. 実行時に選択中プリセットのフィルタが適用される
+
+-----
+
+## 6.11 Git コミット
+
+```bash
+git add .
+git commit -m "Phase 6: プリセットモデル + JSON 永続化 + ComboBox 連動"
+```
+
+-----
+
+## 動作確認チェックリスト
+
+- [ ] 初回起動でサンプルプリセットが生成される
+- [ ] JSON ファイルがプリセットフォルダに保存されている
+- [ ] JSON の中身が期待通りのフォーマットである
+- [ ] ComboBox でプリセットを切り替えられる
+- [ ] 選択変更時にプリセット詳細が更新される
+- [ ] 実行時に選択中プリセットの条件が適用される
+- [ ] アプリ再起動後もプリセットが読み込まれる
+
+-----
+
+## 次のフェーズへ
+
+Phase 7 ではプリセット管理画面（一覧表示・複製・削除）を実装する。
