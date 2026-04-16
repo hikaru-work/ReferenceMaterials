@@ -1,0 +1,362 @@
+# Phase 7: プリセット管理画面
+
+## ゴール
+
+モーダルウィンドウでプリセットの一覧表示・複製・削除ができる状態。
+編集（新規作成含む）は Phase 8 で実装するため、ボタンだけ配置しておく。
+
+-----
+
+## 7.1 管理画面の ViewModel
+
+```csharp
+// ViewModels/PresetManagementViewModel.cs
+using System.Collections.ObjectModel;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using CsvTool.App.Models;
+using CsvTool.App.Services;
+
+namespace CsvTool.App.ViewModels;
+
+public partial class PresetManagementViewModel : ViewModelBase
+{
+    private readonly IPresetRepository _presetRepository;
+
+    public PresetManagementViewModel(IPresetRepository presetRepository)
+    {
+        _presetRepository = presetRepository;
+        LoadPresets();
+    }
+
+    [ObservableProperty]
+    private ObservableCollection<Preset> _presets = new();
+
+    [ObservableProperty]
+    private Preset? _selectedPreset;
+
+    [ObservableProperty]
+    private ObservableCollection<Preset> _selectedPresets = new();
+
+    // 選択件数に応じたボタン制御
+    public bool CanDuplicate => SelectedPresets.Count == 1;
+    public bool CanEdit => SelectedPresets.Count == 1;
+    public bool CanDelete => SelectedPresets.Count > 0;
+    public bool CanExport => SelectedPresets.Count > 0;
+
+    // 選択変更時にボタン有効/無効を再評価
+    public void NotifySelectionChanged()
+    {
+        OnPropertyChanged(nameof(CanDuplicate));
+        OnPropertyChanged(nameof(CanEdit));
+        OnPropertyChanged(nameof(CanDelete));
+        OnPropertyChanged(nameof(CanExport));
+        DuplicateCommand.NotifyCanExecuteChanged();
+        DeleteCommand.NotifyCanExecuteChanged();
+    }
+
+    public string SelectionInfo =>
+        $"{SelectedPresets.Count}件選択中 / 全{Presets.Count}件";
+
+    // --- コマンド ---
+
+    [RelayCommand(CanExecute = nameof(CanDuplicate))]
+    private void Duplicate()
+    {
+        if (SelectedPresets.Count != 1) return;
+        var original = SelectedPresets[0];
+
+        var copy = new Preset
+        {
+            Name = $"{original.Name} のコピー",
+            Description = original.Description,
+            CategoryColumn = original.CategoryColumn,
+            Filters = original.Filters
+                .Select(f => new FilterRule(f.Column, f.Op, f.Value))
+                .ToList(),
+            OutputFileNamePattern = original.OutputFileNamePattern,
+        };
+
+        _presetRepository.Save(copy);
+        LoadPresets();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanDelete))]
+    private void Delete()
+    {
+        // 確認は View 側で実施してからこのコマンドを呼ぶ
+        foreach (var preset in SelectedPresets.ToList())
+        {
+            _presetRepository.Delete(preset.Id);
+        }
+        LoadPresets();
+    }
+
+    /// <summary>
+    /// 編集完了後にリスト更新するために公開
+    /// </summary>
+    public void LoadPresets()
+    {
+        _presetRepository.Reload();
+        Presets = new ObservableCollection<Preset>(
+            _presetRepository.GetAll());
+        SelectedPresets.Clear();
+        NotifySelectionChanged();
+        OnPropertyChanged(nameof(SelectionInfo));
+    }
+}
+```
+
+-----
+
+## 7.2 管理画面の View（AXAML）
+
+```xml
+<!-- Views/PresetManagementWindow.axaml -->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:CsvTool.App.ViewModels"
+        xmlns:models="using:CsvTool.App.Models"
+        x:Class="CsvTool.App.Views.PresetManagementWindow"
+        x:DataType="vm:PresetManagementViewModel"
+        Title="プリセット管理"
+        Width="750" Height="500"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+    <DockPanel Margin="16">
+
+        <!-- 上部: ツールバー -->
+        <StackPanel DockPanel.Dock="Top"
+                    Orientation="Horizontal"
+                    Spacing="6"
+                    Margin="0,0,0,12">
+            <!-- 新規は Phase 8 で実装 -->
+            <Button Content="新規" Padding="10,5" />
+            <Button Content="複製"
+                    Command="{Binding DuplicateCommand}"
+                    Padding="10,5" />
+            <Button Content="編集" Padding="10,5" />
+            <!-- Phase 8 で接続 -->
+            <Button Content="削除"
+                    Command="{Binding DeleteCommand}"
+                    Padding="10,5" />
+
+            <!-- スペーサ -->
+            <Border Width="1" Background="#E5E5E5"
+                    Margin="8,2" />
+
+            <!-- Phase 9 で接続 -->
+            <Button Content="インポート" Padding="10,5" />
+            <Button Content="エクスポート" Padding="10,5" />
+        </StackPanel>
+
+        <!-- 下部: ステータス + 閉じるボタン -->
+        <Grid DockPanel.Dock="Bottom"
+              ColumnDefinitions="*,Auto"
+              Margin="0,12,0,0">
+            <TextBlock Text="{Binding SelectionInfo}"
+                       FontSize="12"
+                       Foreground="#737373"
+                       VerticalAlignment="Center" />
+            <Button Grid.Column="1"
+                    Content="閉じる"
+                    Padding="16,6"
+                    Name="CloseButton" />
+        </Grid>
+
+        <!-- 中央: プリセット一覧 -->
+        <DataGrid ItemsSource="{Binding Presets}"
+                  SelectedItem="{Binding SelectedPreset}"
+                  SelectionMode="Extended"
+                  CanUserResizeColumns="True"
+                  CanUserSortColumns="True"
+                  IsReadOnly="True"
+                  GridLinesVisibility="Horizontal"
+                  BorderBrush="#E5E5E5"
+                  BorderThickness="1"
+                  CornerRadius="4"
+                  Name="PresetGrid">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="名前"
+                                    Binding="{Binding Name}"
+                                    Width="200" />
+                <DataGridTextColumn Header="説明"
+                                    Binding="{Binding Description}"
+                                    Width="*" />
+                <DataGridTextColumn Header="Ver"
+                                    Binding="{Binding SchemaVersion,
+                                        StringFormat='v{0}'}"
+                                    Width="50" />
+                <DataGridTextColumn Header="更新日"
+                                    Binding="{Binding UpdatedAt,
+                                        StringFormat='{}{0:yyyy-MM-dd}'}"
+                                    Width="100" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+    </DockPanel>
+
+</Window>
+```
+
+-----
+
+## 7.3 管理画面のコードビハインド
+
+```csharp
+// Views/PresetManagementWindow.axaml.cs
+using Avalonia.Controls;
+using CsvTool.App.ViewModels;
+
+namespace CsvTool.App.Views;
+
+public partial class PresetManagementWindow : Window
+{
+    public PresetManagementWindow()
+    {
+        InitializeComponent();
+
+        // 閉じるボタン
+        CloseButton.Click += (_, _) => Close();
+
+        // DataGrid の選択変更をハンドリング
+        PresetGrid.SelectionChanged += (_, _) =>
+        {
+            if (DataContext is PresetManagementViewModel vm)
+            {
+                vm.SelectedPresets.Clear();
+                foreach (var item in PresetGrid.SelectedItems)
+                {
+                    if (item is Models.Preset preset)
+                        vm.SelectedPresets.Add(preset);
+                }
+                vm.NotifySelectionChanged();
+            }
+        };
+    }
+}
+```
+
+> **DataGrid の複数選択は `SelectedItems` で取得する**。
+> `SelectedItems` は直接バインドできないため、コードビハインドで処理する。
+> これは Avalonia の DataGrid の既知の制約。
+
+-----
+
+## 7.4 メイン画面から管理画面を開く
+
+`MainWindowViewModel` に管理画面を開くコマンドを追加:
+
+```csharp
+// MainWindowViewModel.cs に追加
+
+[RelayCommand]
+private async Task OpenPresetManagement(Window window)
+{
+    var vm = App.Services.GetRequiredService<PresetManagementViewModel>();
+    var managementWindow = new PresetManagementWindow
+    {
+        DataContext = vm
+    };
+
+    await managementWindow.ShowDialog(window);
+
+    // 管理画面を閉じた後、プリセット一覧を再読み込み
+    LoadPresets();
+}
+```
+
+メイン画面の「管理…」ボタンにコマンドを接続:
+
+```xml
+<Button Content="管理..."
+        Command="{Binding OpenPresetManagementCommand}"
+        CommandParameter="{Binding $parent[Window]}"
+        Margin="8,0,0,0"
+        Padding="12,6" />
+```
+
+-----
+
+## 7.5 DI 登録
+
+```csharp
+// App.axaml.cs の ConfigureServices に追加
+services.AddTransient<PresetManagementViewModel>();
+```
+
+-----
+
+## 7.6 削除時の確認ダイアログ
+
+削除コマンドを直接呼ぶ前に、コードビハインドで確認する:
+
+```csharp
+// PresetManagementWindow.axaml.cs
+// 削除ボタンを Name="DeleteButton" にして、以下を追加:
+
+DeleteButton.Click += async (_, _) =>
+{
+    if (DataContext is not PresetManagementViewModel vm) return;
+    if (vm.SelectedPresets.Count == 0) return;
+
+    var dialog = new ContentDialog
+    {
+        Title = "確認",
+        Content = $"{vm.SelectedPresets.Count}件のプリセットを削除します。\nこの操作は元に戻せません。",
+        PrimaryButtonText = "削除",
+        CloseButtonText = "キャンセル"
+    };
+
+    // Avalonia の ContentDialog には ShowAsync(parent) が必要
+    // もしくは MessageBox 等を使う
+    vm.Delete();
+};
+```
+
+> 確認ダイアログの実装方法は Avalonia のバージョンで異なる。
+> `DialogHost.Avalonia` や `MessageBox.Avalonia` パッケージを使うと楽。
+> シンプルに自前のモーダルウィンドウで作っても問題ない。
+
+-----
+
+## 7.7 動作確認
+
+```bash
+dotnet run
+```
+
+1. メイン画面の「管理…」ボタンでモーダルが開く
+1. DataGrid にプリセット一覧が表示される
+1. 1 件選択して「複製」→ 一覧にコピーが追加される
+1. 複数選択して「削除」→ 一覧から消え、JSON ファイルも消える
+1. 管理画面を閉じると、メイン画面の ComboBox が更新される
+
+-----
+
+## 7.8 Git コミット
+
+```bash
+git add .
+git commit -m "Phase 7: プリセット管理画面（一覧・複製・削除）"
+```
+
+-----
+
+## 動作確認チェックリスト
+
+- [ ] メイン画面から管理画面をモーダルで開ける
+- [ ] DataGrid にプリセット一覧が表示される
+- [ ] 行クリックで選択できる（複数選択含む）
+- [ ] 「複製」で選択プリセットのコピーが作成される
+- [ ] 「削除」で選択プリセットが削除される（JSON も消える）
+- [ ] 管理画面を閉じた後、メイン画面に変更が反映される
+- [ ] 選択件数が下部に正しく表示される
+- [ ] 未選択時に「複製」「削除」ボタンがグレーアウト
+
+-----
+
+## 次のフェーズへ
+
+Phase 8 ではプリセット編集画面（新規作成・既存編集）を実装する。
