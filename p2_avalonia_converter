@@ -1,0 +1,246 @@
+# Phase 2: MVVM の土台
+
+## ゴール
+
+ViewModel のプロパティが View にバインドされ、DI コンテナ経由で ViewModel が注入される状態。
+
+-----
+
+## 2.1 ViewModelBase の確認
+
+テンプレートが生成した `ViewModels/ViewModelBase.cs` を `CommunityToolkit.Mvvm` に差し替える:
+
+```csharp
+// ViewModels/ViewModelBase.cs
+using CommunityToolkit.Mvvm.ComponentModel;
+
+namespace CsvTool.App.ViewModels;
+
+public abstract class ViewModelBase : ObservableObject
+{
+}
+```
+
+> `CommunityToolkit.Mvvm` の `ObservableObject` は `INotifyPropertyChanged` を実装済み。
+> `[ObservableProperty]` 等のソースジェネレーターが使えるようになる。
+
+-----
+
+## 2.2 MainWindowViewModel の雛形
+
+```csharp
+// ViewModels/MainWindowViewModel.cs
+using CommunityToolkit.Mvvm.ComponentModel;
+
+namespace CsvTool.App.ViewModels;
+
+public partial class MainWindowViewModel : ViewModelBase
+{
+    [ObservableProperty]
+    private string _title = "CSV分類ツール v0.1";
+
+    [ObservableProperty]
+    private string _statusText = "準備完了";
+}
+```
+
+> **`partial` を忘れない**: ソースジェネレーターが `Title`, `StatusText` プロパティを
+> 自動生成するために必要。`_title` → `Title` に自動変換される。
+
+-----
+
+## 2.3 DI コンテナのセットアップ
+
+```csharp
+// App.axaml.cs
+using Avalonia;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Markup.Xaml;
+using CsvTool.App.ViewModels;
+using CsvTool.App.Views;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace CsvTool.App;
+
+public partial class App : Application
+{
+    public static ServiceProvider Services { get; private set; } = null!;
+
+    public override void Initialize()
+    {
+        AvaloniaXamlLoader.Load(this);
+    }
+
+    public override void OnFrameworkInitializationCompleted()
+    {
+        // DI コンテナ構築
+        var services = new ServiceCollection();
+        ConfigureServices(services);
+        Services = services.BuildServiceProvider();
+
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            desktop.MainWindow = new MainWindow
+            {
+                DataContext = Services.GetRequiredService<MainWindowViewModel>()
+            };
+        }
+
+        base.OnFrameworkInitializationCompleted();
+    }
+
+    private static void ConfigureServices(IServiceCollection services)
+    {
+        // ViewModels
+        services.AddTransient<MainWindowViewModel>();
+
+        // Services（Phase 4 以降で追加）
+        // services.AddSingleton<ICsvProcessor, CsvProcessor>();
+        // services.AddSingleton<IPresetRepository, PresetRepository>();
+    }
+}
+```
+
+-----
+
+## 2.4 MainWindow.axaml に CompiledBindings を設定
+
+```xml
+<!-- Views/MainWindow.axaml -->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:CsvTool.App.ViewModels"
+        x:Class="CsvTool.App.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="{Binding Title}"
+        Width="900" Height="700"
+        WindowStartupLocation="CenterScreen">
+
+    <DockPanel>
+        <!-- ステータスバー -->
+        <Border DockPanel.Dock="Bottom"
+                Background="#F5F5F5"
+                BorderBrush="#D4D4D4"
+                BorderThickness="0,1,0,0"
+                Padding="12,4">
+            <TextBlock Text="{Binding StatusText}"
+                       FontSize="12"
+                       Foreground="#737373" />
+        </Border>
+
+        <!-- メインコンテンツ（Phase 3 で実装） -->
+        <StackPanel Margin="24"
+                    VerticalAlignment="Center"
+                    HorizontalAlignment="Center">
+            <TextBlock Text="{Binding Title}"
+                       FontSize="20"
+                       FontWeight="Bold"
+                       HorizontalAlignment="Center" />
+            <TextBlock Text="Phase 2: MVVM バインディング確認"
+                       FontSize="14"
+                       Foreground="#737373"
+                       Margin="0,8,0,0"
+                       HorizontalAlignment="Center" />
+        </StackPanel>
+    </DockPanel>
+
+</Window>
+```
+
+> **`x:DataType="vm:MainWindowViewModel"`** が CompiledBindings の肝。
+> これを指定することで、バインディングがコンパイル時に型チェックされる。
+> 指定しないと AOT 発行時にバインディングが動かない。
+
+-----
+
+## 2.5 MainWindow.axaml.cs（コードビハインド）
+
+```csharp
+// Views/MainWindow.axaml.cs
+using Avalonia.Controls;
+
+namespace CsvTool.App.Views;
+
+public partial class MainWindow : Window
+{
+    public MainWindow()
+    {
+        InitializeComponent();
+    }
+}
+```
+
+> コードビハインドは最小限に。ロジックは ViewModel 側に書く。
+
+-----
+
+## 2.6 CompiledBindings の仕組み（理解用）
+
+通常の WPF/Avalonia バインディング:
+
+```xml
+<!-- リフレクションで解決。AOT 不可 -->
+<TextBlock Text="{Binding Title}" />
+```
+
+CompiledBindings:
+
+```xml
+<!-- x:DataType 指定により、コンパイル時に解決。AOT 対応 -->
+<TextBlock Text="{Binding Title}" />
+```
+
+見た目は同じだが、`x:DataType` が指定されている XAML 内では
+**バインディングがコンパイル時に型チェックされる**。
+存在しないプロパティ名を書くとビルドエラーになるため、タイポ防止にもなる。
+
+**注意**: 子コントロールで DataContext を別の型に切り替える場合は、
+その要素にも `x:DataType` を再指定する必要がある。
+
+-----
+
+## 2.7 動作確認
+
+```bash
+dotnet run
+```
+
+確認ポイント:
+
+- ウィンドウタイトルに「CSV分類ツール v0.1」が表示される
+- 画面中央に同テキストが表示される
+- 下部のステータスバーに「準備完了」が表示される
+
+-----
+
+## 2.8 Git コミット
+
+```bash
+git add .
+git commit -m "Phase 2: MVVM 土台 + DI + CompiledBindings"
+```
+
+-----
+
+## 動作確認チェックリスト
+
+- [ ] `dotnet run` でウィンドウが起動する
+- [ ] ウィンドウタイトルが ViewModel の `Title` プロパティにバインドされている
+- [ ] ステータスバーに `StatusText` が表示されている
+- [ ] `_title` を変更して再実行すると表示が変わることを確認
+- [ ] `x:DataType` に存在しないプロパティを書くとビルドエラーになることを確認
+
+-----
+
+## このフェーズで覚えたこと
+
+- `[ObservableProperty]` でプロパティ自動生成（`partial class` 必須）
+- `x:DataType` で CompiledBindings 有効化
+- DI コンテナで ViewModel を注入するパターン
+- Avalonia の `DockPanel` レイアウト
+
+-----
+
+## 次のフェーズへ
+
+Phase 3 ではメイン画面の UI を構築し、`StorageProvider` でファイル選択ダイアログを実装する。
