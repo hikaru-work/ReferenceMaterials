@@ -1,0 +1,374 @@
+# Phase 3: メイン画面の UI（ファイル選択まで）
+
+## ゴール
+
+モックのメイン画面を AXAML で再現し、ファイル/フォルダ選択ダイアログが動作する状態。
+処理はまだ動かない（ボタンを押しても何も起きない）。
+
+-----
+
+## 3.1 MainWindowViewModel を拡張
+
+```csharp
+// ViewModels/MainWindowViewModel.cs
+using System.Collections.ObjectModel;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Platform.Storage;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+
+namespace CsvTool.App.ViewModels;
+
+public partial class MainWindowViewModel : ViewModelBase
+{
+    [ObservableProperty]
+    private string _title = "CSV分類ツール v0.1";
+
+    [ObservableProperty]
+    private string _statusText = "準備完了";
+
+    [ObservableProperty]
+    private string _inputPath = string.Empty;
+
+    [ObservableProperty]
+    private string _outputPath = string.Empty;
+
+    // プリセット（Phase 6 まではハードコード）
+    [ObservableProperty]
+    private string _selectedPresetName = "2026Q1 売上データ分類";
+
+    [ObservableProperty]
+    private string _presetDescription = "月次売上CSVから削除済みを除外し、地域別に分割";
+
+    // 実行可否の判定
+    public bool CanExecute =>
+        !string.IsNullOrWhiteSpace(InputPath) &&
+        !string.IsNullOrWhiteSpace(OutputPath);
+
+    // プロパティ変更時に CanExecute を再評価
+    partial void OnInputPathChanged(string value)
+    {
+        OnPropertyChanged(nameof(CanExecute));
+        ExecuteCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnOutputPathChanged(string value)
+    {
+        OnPropertyChanged(nameof(CanExecute));
+        ExecuteCommand.NotifyCanExecuteChanged();
+    }
+
+    // --- コマンド ---
+
+    // ファイル選択（View 側から Window 参照を渡す）
+    [RelayCommand]
+    private async Task BrowseInputFile(Window window)
+    {
+        var storageProvider = window.StorageProvider;
+        var result = await storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "入力CSVファイルを選択",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("CSVファイル")
+                {
+                    Patterns = new[] { "*.csv" }
+                },
+                FilePickerFileTypes.All
+            }
+        });
+
+        if (result.Count > 0)
+        {
+            InputPath = result[0].Path.LocalPath;
+        }
+    }
+
+    [RelayCommand]
+    private async Task BrowseOutputFolder(Window window)
+    {
+        var storageProvider = window.StorageProvider;
+        var result = await storageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "出力先フォルダを選択",
+            AllowMultiple = false
+        });
+
+        if (result.Count > 0)
+        {
+            OutputPath = result[0].Path.LocalPath;
+        }
+    }
+
+    // 実行（Phase 5 で実装。今は空）
+    [RelayCommand(CanExecute = nameof(CanExecute))]
+    private async Task Execute()
+    {
+        StatusText = "処理を開始しました...（未実装）";
+        await Task.Delay(1000);
+        StatusText = "準備完了";
+    }
+}
+```
+
+-----
+
+## 3.2 MainWindow.axaml のレイアウト
+
+```xml
+<!-- Views/MainWindow.axaml -->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:CsvTool.App.ViewModels"
+        x:Class="CsvTool.App.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="{Binding Title}"
+        Width="900" Height="700"
+        WindowStartupLocation="CenterScreen">
+
+    <DockPanel>
+        <!-- メニューバー -->
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="ファイル(_F)">
+                <MenuItem Header="終了(_X)" />
+            </MenuItem>
+            <MenuItem Header="プリセット(_P)">
+                <MenuItem Header="管理..." />
+            </MenuItem>
+            <MenuItem Header="ヘルプ(_H)">
+                <MenuItem Header="バージョン情報" />
+            </MenuItem>
+        </Menu>
+
+        <!-- ステータスバー -->
+        <Border DockPanel.Dock="Bottom"
+                Background="#F5F5F5"
+                BorderBrush="#D4D4D4"
+                BorderThickness="0,1,0,0"
+                Padding="12,4">
+            <Grid>
+                <TextBlock Text="{Binding StatusText}"
+                           FontSize="12"
+                           Foreground="#737373" />
+                <TextBlock Text="Avalonia UI 11.x · .NET 9"
+                           FontSize="12"
+                           Foreground="#A3A3A3"
+                           HorizontalAlignment="Right" />
+            </Grid>
+        </Border>
+
+        <!-- メインコンテンツ -->
+        <ScrollViewer Padding="24">
+            <StackPanel Spacing="16" MaxWidth="800">
+
+                <!-- プリセット選択 -->
+                <Border Background="#EFF6FF"
+                        BorderBrush="#BFDBFE"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="16">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="変換プリセット"
+                                   FontSize="14"
+                                   FontWeight="SemiBold" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <!-- Phase 6 で ComboBox に差し替え -->
+                            <TextBlock Grid.Column="0"
+                                       Text="{Binding SelectedPresetName}"
+                                       FontSize="13"
+                                       VerticalAlignment="Center"
+                                       Padding="8,6"
+                                       Background="White"
+                                       BorderBrush="#D4D4D4"
+                                       BorderThickness="1"
+                                       CornerRadius="4" />
+                            <Button Grid.Column="1"
+                                    Content="管理..."
+                                    Margin="8,0,0,0"
+                                    Padding="12,6" />
+                        </Grid>
+                        <Border Background="White"
+                                BorderBrush="#DBEAFE"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Padding="10">
+                            <TextBlock Text="{Binding PresetDescription}"
+                                       FontSize="12"
+                                       Foreground="#737373" />
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <!-- 入力ファイル -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="入力ファイル"
+                               FontSize="14"
+                               FontWeight="SemiBold" />
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBox Grid.Column="0"
+                                 Text="{Binding InputPath}"
+                                 Watermark="CSVファイルのパスを入力、または参照..."
+                                 FontSize="13" />
+                        <Button Grid.Column="1"
+                                Content="参照..."
+                                Command="{Binding BrowseInputFileCommand}"
+                                CommandParameter="{Binding $parent[Window]}"
+                                Margin="8,0,0,0"
+                                Padding="12,6" />
+                    </Grid>
+                </StackPanel>
+
+                <!-- 出力先フォルダ -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="出力先フォルダ"
+                               FontSize="14"
+                               FontWeight="SemiBold" />
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBox Grid.Column="0"
+                                 Text="{Binding OutputPath}"
+                                 Watermark="出力先フォルダのパスを入力、または参照..."
+                                 FontSize="13" />
+                        <Button Grid.Column="1"
+                                Content="参照..."
+                                Command="{Binding BrowseOutputFolderCommand}"
+                                CommandParameter="{Binding $parent[Window]}"
+                                Margin="8,0,0,0"
+                                Padding="12,6" />
+                    </Grid>
+                </StackPanel>
+
+                <!-- 実行ボタン -->
+                <Button Content="実行"
+                        Command="{Binding ExecuteCommand}"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
+                        Padding="16,10"
+                        FontSize="14"
+                        FontWeight="SemiBold"
+                        Background="#2563EB"
+                        Foreground="White"
+                        CornerRadius="4" />
+
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+
+</Window>
+```
+
+-----
+
+## 3.3 重要ポイント: Window 参照の渡し方
+
+Avalonia の `StorageProvider` は `Window`（または `TopLevel`）に紐づいている。
+ViewModel から直接 Window にアクセスするのは MVVM 違反なので、
+`CommandParameter` 経由で渡す:
+
+```xml
+<!-- XAML 側 -->
+<Button Command="{Binding BrowseInputFileCommand}"
+        CommandParameter="{Binding $parent[Window]}" />
+```
+
+```csharp
+// ViewModel 側
+[RelayCommand]
+private async Task BrowseInputFile(Window window)
+{
+    var storageProvider = window.StorageProvider;
+    // ...
+}
+```
+
+> `$parent[Window]` は Avalonia のバインディング構文で、
+> 親要素を Window 型まで遡って取得する。
+
+-----
+
+## 3.4 スタイル調整（任意）
+
+Avalonia のデフォルトテーマ（Fluent）で問題ないが、
+統一感を出すなら `App.axaml` にカスタムスタイルを追加できる:
+
+```xml
+<!-- App.axaml の <Application.Styles> 内 -->
+<FluentTheme />
+
+<!-- カスタムスタイル -->
+<StyleInclude Source="avares://CsvTool.App/Styles/App.axaml" />
+```
+
+> ただし Phase 3 時点では不要。見た目の調整は機能が揃ってからで十分。
+
+-----
+
+## 3.5 動作確認
+
+```bash
+dotnet run
+```
+
+確認ポイント:
+
+1. メニューバーが表示される（ファイル / プリセット / ヘルプ）
+1. プリセット名と説明がハードコード値で表示される
+1. 「参照…」ボタンでファイル選択ダイアログが開く
+1. 選択したパスが TextBox に反映される
+1. パスが空の状態では「実行」ボタンが押せない（グレーアウト）
+1. 両方のパスを入力すると「実行」ボタンが有効になる
+1. 実行ボタンを押すとステータスバーが一瞬変わる
+
+-----
+
+## 3.6 Git コミット
+
+```bash
+git add .
+git commit -m "Phase 3: メイン画面 UI + ファイル選択ダイアログ"
+```
+
+-----
+
+## 動作確認チェックリスト
+
+- [ ] メニューバー表示
+- [ ] プリセット情報がバインドされて表示
+- [ ] 入力ファイル参照ダイアログが開く
+- [ ] 出力先フォルダ参照ダイアログが開く
+- [ ] パスが TextBox に反映される
+- [ ] 両パス未入力時に実行ボタンが無効
+- [ ] 両パス入力後に実行ボタンが有効
+
+-----
+
+## つまずきポイント
+
+### 「`$parent[Window]` が解決できない」
+
+`x:DataType` を指定していると CompiledBindings モードになるため、
+`$parent[Window]` の型解決に失敗する場合がある。
+その場合は `CommandParameter` のバインディングだけ
+`ReflectionBinding` に切り替える:
+
+```xml
+<Button Command="{Binding BrowseInputFileCommand}"
+        CommandParameter="{ReflectionBinding $parent[Window]}" />
+```
+
+### 「StorageProvider が null」
+
+`StorageProvider` はプラットフォーム固有のため、
+デザインモード（プレビュー）では null になることがある。
+null チェックを入れておくと安全:
+
+```csharp
+if (!storageProvider.CanOpen) return;
+```
+
+-----
+
+## 次のフェーズへ
+
+Phase 4 では UI を離れ、CSV 処理のコアロジックを単独で実装・検証する。
