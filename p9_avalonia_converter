@@ -1,0 +1,725 @@
+# Phase 9: インポート・エクスポート
+
+## ゴール
+
+プリセットを JSON ファイルとしてローカルにエクスポートし、
+別環境からインポート（名前重複時の競合解決含む）できる状態。
+
+-----
+
+## 9.1 エクスポートフォーマット
+
+### 単一プリセット
+
+拡張子: `.json`
+
+```json
+{
+  "schemaVersion": 1,
+  "exportedAt": "2026-04-17T15:00:00+09:00",
+  "presets": [
+    { ... プリセットオブジェクト（idを除外）... }
+  ]
+}
+```
+
+### 複数プリセット
+
+拡張子: `.zip`（中に複数の `.json`）
+
+```
+presets_2026-04-17.zip
+├── 2026Q1_売上データ分類.json
+├── 顧客マスタ整理.json
+└── 月次ログ仕分け.json
+```
+
+各 `.json` は単一プリセットと同じフォーマット。
+
+-----
+
+## 9.2 エクスポートモデル
+
+```csharp
+// Models/PresetExportData.cs
+namespace CsvTool.App.Models;
+
+public class PresetExportData
+{
+    public int SchemaVersion { get; set; } = 1;
+    public DateTime ExportedAt { get; set; } = DateTime.Now;
+    public List<Preset> Presets { get; set; } = new();
+}
+```
+
+-----
+
+## 9.3 エクスポート/インポートサービス
+
+```csharp
+// Services/IPresetExchangeService.cs
+using CsvTool.App.Models;
+
+namespace CsvTool.App.Services;
+
+public interface IPresetExchangeService
+{
+    /// <summary>
+    /// プリセットを JSON ファイルにエクスポート
+    /// </summary>
+    Task ExportAsync(IReadOnlyList<Preset> presets, string filePath);
+
+    /// <summary>
+    /// JSON または ZIP からプリセットを読み込む（検証のみ、保存しない）
+    /// </summary>
+    Task<ImportPreview> ImportPreviewAsync(string filePath);
+}
+
+public class ImportPreview
+{
+    public List<Preset> Presets { get; set; } = new();
+    public List<string> Warnings { get; set; } = new();
+    public bool HasVersionWarning { get; set; }
+    public int FileSchemaVersion { get; set; }
+}
+```
+
+```csharp
+// Services/PresetExchangeService.cs
+using System.IO.Compression;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using CsvTool.App.Models;
+
+namespace CsvTool.App.Services;
+
+public class PresetExchangeService : IPresetExchangeService
+{
+    private const int CurrentSchemaVersion = 1;
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter() }
+    };
+
+    public async Task ExportAsync(
+        IReadOnlyList<Preset> presets, string filePath)
+    {
+        if (filePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+        {
+            await ExportAsZipAsync(presets, filePath);
+        }
+        else
+        {
+            await ExportAsJsonAsync(presets, filePath);
+        }
+    }
+
+    private async Task ExportAsJsonAsync(
+        IReadOnlyList<Preset> presets, string filePath)
+    {
+        var data = new PresetExportData
+        {
+            SchemaVersion = CurrentSchemaVersion,
+            ExportedAt = DateTime.Now,
+            Presets = presets.Select(StripId).ToList()
+        };
+
+        var json = JsonSerializer.Serialize(data, JsonOptions);
+        await File.WriteAllTextAsync(filePath, json);
+    }
+
+    private async Task ExportAsZipAsync(
+        IReadOnlyList<Preset> presets, string filePath)
+    {
+        using var stream = File.Create(filePath);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Create);
+
+        foreach (var preset in presets)
+        {
+            var data = new PresetExportData
+            {
+                SchemaVersion = CurrentSchemaVersion,
+                ExportedAt = DateTime.Now,
+                Presets = new List<Preset> { StripId(preset) }
+            };
+
+            var json = JsonSerializer.Serialize(data, JsonOptions);
+            var safeFileName = SanitizeFileName(preset.Name) + ".json";
+            var entry = archive.CreateEntry(safeFileName);
+
+            using var writer = new StreamWriter(entry.Open());
+            await writer.WriteAsync(json);
+        }
+    }
+
+    public async Task<ImportPreview> ImportPreviewAsync(string filePath)
+    {
+        var preview = new ImportPreview();
+
+        if (filePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+        {
+            await ImportFromZipAsync(filePath, preview);
+        }
+        else
+        {
+            await ImportFromJsonAsync(filePath, preview);
+        }
+
+        return preview;
+    }
+
+    private async Task ImportFromJsonAsync(
+        string filePath, ImportPreview preview)
+    {
+        var json = await File.ReadAllTextAsync(filePath);
+        var data = JsonSerializer.Deserialize<PresetExportData>(
+            json, JsonOptions);
+
+        if (data == null)
+        {
+            preview.Warnings.Add("ファイルの読み込みに失敗しました");
+            return;
+        }
+
+        CheckVersion(data.SchemaVersion, preview);
+
+        foreach (var preset in data.Presets)
+        {
+            ValidatePreset(preset, preview);
+            preset.Id = Guid.NewGuid().ToString("N")[..8]; // 新しいIDを付与
+            preview.Presets.Add(preset);
+        }
+    }
+
+    private async Task ImportFromZipAsync(
+        string filePath, ImportPreview preview)
+    {
+        using var stream = File.OpenRead(filePath);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
+
+        foreach (var entry in archive.Entries
+            .Where(e => e.Name.EndsWith(".json",
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                using var reader = new StreamReader(entry.Open());
+                var json = await reader.ReadToEndAsync();
+                var data = JsonSerializer.Deserialize<PresetExportData>(
+                    json, JsonOptions);
+
+                if (data?.Presets == null) continue;
+
+                CheckVersion(data.SchemaVersion, preview);
+
+                foreach (var preset in data.Presets)
+                {
+                    ValidatePreset(preset, preview);
+                    preset.Id = Guid.NewGuid().ToString("N")[..8];
+                    preview.Presets.Add(preset);
+                }
+            }
+            catch (JsonException)
+            {
+                preview.Warnings.Add(
+                    $"ファイル '{entry.Name}' の読み込みに失敗しました");
+            }
+        }
+    }
+
+    private static void CheckVersion(
+        int fileVersion, ImportPreview preview)
+    {
+        if (fileVersion > CurrentSchemaVersion)
+        {
+            preview.HasVersionWarning = true;
+            preview.FileSchemaVersion = fileVersion;
+            preview.Warnings.Add(
+                $"スキーマ v{fileVersion} は現在の v{CurrentSchemaVersion} " +
+                "より新しいため、一部の設定が無視される可能性があります");
+        }
+    }
+
+    private static void ValidatePreset(
+        Preset preset, ImportPreview preview)
+    {
+        if (string.IsNullOrWhiteSpace(preset.Name))
+        {
+            preset.Name = "（名前なし）";
+            preview.Warnings.Add("名前が空のプリセットがあります");
+        }
+    }
+
+    private static Preset StripId(Preset p) => new()
+    {
+        SchemaVersion = p.SchemaVersion,
+        Name = p.Name,
+        Description = p.Description,
+        CategoryColumn = p.CategoryColumn,
+        Filters = p.Filters,
+        OutputFileNamePattern = p.OutputFileNamePattern,
+        CreatedAt = p.CreatedAt,
+        UpdatedAt = p.UpdatedAt,
+    };
+
+    private static string SanitizeFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        return string.Concat(name.Select(c =>
+            invalid.Contains(c) ? '_' : c));
+    }
+}
+```
+
+-----
+
+## 9.4 インポートプレビュー ViewModel
+
+```csharp
+// ViewModels/ImportPreviewViewModel.cs
+using System.Collections.ObjectModel;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using CsvTool.App.Models;
+
+namespace CsvTool.App.ViewModels;
+
+public enum ConflictResolution
+{
+    Add,       // 新規追加（重複なし）
+    Rename,    // 名前変更して追加
+    Overwrite, // 上書き
+    Skip       // スキップ
+}
+
+public partial class ImportItemViewModel : ViewModelBase
+{
+    public Preset Preset { get; }
+    public bool HasConflict { get; }
+
+    [ObservableProperty]
+    private ConflictResolution _resolution;
+
+    public ImportItemViewModel(Preset preset, bool hasConflict)
+    {
+        Preset = preset;
+        HasConflict = hasConflict;
+        Resolution = hasConflict ? ConflictResolution.Rename : ConflictResolution.Add;
+    }
+}
+
+public partial class ImportPreviewViewModel : ViewModelBase
+{
+    [ObservableProperty]
+    private ObservableCollection<ImportItemViewModel> _items = new();
+
+    [ObservableProperty]
+    private ObservableCollection<string> _warnings = new();
+
+    [ObservableProperty]
+    private bool _hasVersionWarning;
+
+    [ObservableProperty]
+    private string _versionWarningText = string.Empty;
+
+    public bool HasConflicts => Items.Any(i => i.HasConflict);
+
+    public void Load(
+        ImportPreview preview,
+        IReadOnlyList<Preset> existingPresets)
+    {
+        var existingNames = existingPresets
+            .Select(p => p.Name)
+            .ToHashSet();
+
+        Items = new ObservableCollection<ImportItemViewModel>(
+            preview.Presets.Select(p =>
+                new ImportItemViewModel(p, existingNames.Contains(p.Name))));
+
+        Warnings = new ObservableCollection<string>(preview.Warnings);
+
+        if (preview.HasVersionWarning)
+        {
+            HasVersionWarning = true;
+            VersionWarningText =
+                $"スキーマ v{preview.FileSchemaVersion} のプリセットが" +
+                "含まれています。一部の設定が無視される可能性があります。";
+        }
+    }
+
+    /// <summary>
+    /// 確定。競合解決を適用したプリセット一覧を返す。
+    /// </summary>
+    public List<(Preset Preset, ConflictResolution Resolution)> GetResolvedPresets()
+    {
+        return Items
+            .Where(i => i.Resolution != ConflictResolution.Skip)
+            .Select(i => (i.Preset, i.Resolution))
+            .ToList();
+    }
+}
+```
+
+-----
+
+## 9.5 インポートプレビュー画面（AXAML）
+
+```xml
+<!-- Views/ImportPreviewWindow.axaml -->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:CsvTool.App.ViewModels"
+        x:Class="CsvTool.App.Views.ImportPreviewWindow"
+        x:DataType="vm:ImportPreviewViewModel"
+        Title="インポートのプレビュー"
+        Width="700" Height="500"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+    <DockPanel Margin="20">
+
+        <!-- 下部ボタン -->
+        <StackPanel DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,16,0,0">
+            <Button Content="キャンセル"
+                    Padding="16,6"
+                    Name="CancelButton" />
+            <Button Content="インポート実行"
+                    Padding="16,6"
+                    Background="#2563EB"
+                    Foreground="White"
+                    Name="ImportButton" />
+        </StackPanel>
+
+        <StackPanel Spacing="12">
+
+            <!-- バージョン警告 -->
+            <Border IsVisible="{Binding HasVersionWarning}"
+                    Background="#FFFBEB"
+                    BorderBrush="#FDE68A"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="12">
+                <TextBlock Text="{Binding VersionWarningText}"
+                           FontSize="12"
+                           Foreground="#92400E"
+                           TextWrapping="Wrap" />
+            </Border>
+
+            <!-- 重複警告 -->
+            <Border IsVisible="{Binding HasConflicts}"
+                    Background="#FFF7ED"
+                    BorderBrush="#FDBA74"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="12">
+                <TextBlock Text="名前が重複するプリセットがあります。各プリセットの処理方法を選択してください。"
+                           FontSize="12"
+                           Foreground="#9A3412"
+                           TextWrapping="Wrap" />
+            </Border>
+
+            <!-- プリセット一覧 -->
+            <ItemsControl ItemsSource="{Binding Items}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ImportItemViewModel">
+                        <Border Margin="0,0,0,6"
+                                Padding="12"
+                                CornerRadius="4"
+                                BorderThickness="1"
+                                BorderBrush="#E5E5E5">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <StackPanel Spacing="2">
+                                    <StackPanel Orientation="Horizontal"
+                                                Spacing="8">
+                                        <TextBlock Text="{Binding Preset.Name}"
+                                                   FontWeight="SemiBold"
+                                                   FontSize="13" />
+                                        <TextBlock
+                                            Text="{Binding Preset.SchemaVersion,
+                                                StringFormat='v{0}'}"
+                                            FontSize="11"
+                                            FontFamily="Consolas,monospace"
+                                            Foreground="#A3A3A3"
+                                            VerticalAlignment="Center" />
+                                        <!-- 重複バッジ -->
+                                        <Border IsVisible="{Binding HasConflict}"
+                                                Background="#FED7AA"
+                                                CornerRadius="3"
+                                                Padding="6,1">
+                                            <TextBlock Text="重複"
+                                                       FontSize="10"
+                                                       Foreground="#9A3412" />
+                                        </Border>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Preset.Description}"
+                                               FontSize="11"
+                                               Foreground="#737373" />
+                                </StackPanel>
+
+                                <!-- 競合解決 ComboBox（重複時のみ表示） -->
+                                <ComboBox Grid.Column="1"
+                                          IsVisible="{Binding HasConflict}"
+                                          SelectedIndex="0"
+                                          VerticalAlignment="Center"
+                                          FontSize="12"
+                                          Width="170">
+                                    <ComboBoxItem Content="名前変更して追加"
+                                                  Tag="Rename" />
+                                    <ComboBoxItem Content="上書き"
+                                                  Tag="Overwrite" />
+                                    <ComboBoxItem Content="スキップ"
+                                                  Tag="Skip" />
+                                </ComboBox>
+
+                                <!-- 新規追加バッジ（重複なし時） -->
+                                <Border Grid.Column="1"
+                                        IsVisible="{Binding !HasConflict}"
+                                        Background="#DCFCE7"
+                                        CornerRadius="3"
+                                        Padding="8,2"
+                                        VerticalAlignment="Center">
+                                    <TextBlock Text="新規追加"
+                                               FontSize="11"
+                                               Foreground="#166534" />
+                                </Border>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+        </StackPanel>
+    </DockPanel>
+
+</Window>
+```
+
+-----
+
+## 9.6 インポート確定処理
+
+管理画面のコードビハインドに追加:
+
+```csharp
+// PresetManagementWindow.axaml.cs
+// ImportButton.Click イベント内で呼ぶ
+
+private void ApplyImport(
+    ImportPreviewViewModel previewVm,
+    IPresetRepository repo,
+    IReadOnlyList<Preset> existingPresets)
+{
+    var existingByName = existingPresets
+        .ToDictionary(p => p.Name, p => p);
+
+    foreach (var (preset, resolution) in previewVm.GetResolvedPresets())
+    {
+        switch (resolution)
+        {
+            case ConflictResolution.Add:
+                repo.Save(preset);
+                break;
+
+            case ConflictResolution.Rename:
+                var newName = preset.Name;
+                var n = 2;
+                while (existingByName.ContainsKey(newName)
+                    || newName == preset.Name && n > 2)
+                {
+                    newName = $"{preset.Name} ({n++})";
+                }
+                preset.Name = newName;
+                repo.Save(preset);
+                break;
+
+            case ConflictResolution.Overwrite:
+                if (existingByName.TryGetValue(preset.Name, out var existing))
+                {
+                    preset.Id = existing.Id; // 既存 ID を引き継ぐ
+                }
+                repo.Save(preset);
+                break;
+
+            case ConflictResolution.Skip:
+                break;
+        }
+    }
+}
+```
+
+-----
+
+## 9.7 管理画面のインポート/エクスポートボタン接続
+
+```csharp
+// PresetManagementWindow.axaml.cs に追加
+
+// エクスポートボタン
+ExportButton.Click += async (_, _) =>
+{
+    if (DataContext is not PresetManagementViewModel vm) return;
+    if (vm.SelectedPresets.Count == 0) return;
+
+    var exchange = App.Services
+        .GetRequiredService<IPresetExchangeService>();
+
+    var isSingle = vm.SelectedPresets.Count == 1;
+    var defaultName = isSingle
+        ? $"{vm.SelectedPresets[0].Name}.json"
+        : $"presets_{DateTime.Now:yyyy-MM-dd}.zip";
+
+    var result = await StorageProvider.SaveFilePickerAsync(
+        new FilePickerSaveOptions
+        {
+            Title = "プリセットのエクスポート",
+            SuggestedFileName = defaultName,
+            FileTypeChoices = new[]
+            {
+                new FilePickerFileType("JSON")
+                    { Patterns = new[] { "*.json" } },
+                new FilePickerFileType("ZIP")
+                    { Patterns = new[] { "*.zip" } },
+            }
+        });
+
+    if (result == null) return;
+
+    await exchange.ExportAsync(
+        vm.SelectedPresets.ToList(),
+        result.Path.LocalPath);
+
+    // 成功通知（簡易）
+    // MessageBox やステータスバーで通知
+};
+
+// インポートボタン
+ImportButton.Click += async (_, _) =>
+{
+    var exchange = App.Services
+        .GetRequiredService<IPresetExchangeService>();
+    var repo = App.Services
+        .GetRequiredService<IPresetRepository>();
+
+    var files = await StorageProvider.OpenFilePickerAsync(
+        new FilePickerOpenOptions
+        {
+            Title = "プリセットのインポート",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("プリセットファイル")
+                    { Patterns = new[] { "*.json", "*.zip" } },
+            }
+        });
+
+    if (files.Count == 0) return;
+
+    var preview = await exchange.ImportPreviewAsync(
+        files[0].Path.LocalPath);
+
+    if (preview.Presets.Count == 0)
+    {
+        // エラー通知
+        return;
+    }
+
+    // プレビュー画面を開く
+    var previewVm = new ImportPreviewViewModel();
+    previewVm.Load(preview, repo.GetAll());
+
+    var previewWindow = new ImportPreviewWindow
+        { DataContext = previewVm };
+    var confirmed = await previewWindow.ShowDialog<bool>(this);
+
+    if (confirmed)
+    {
+        ApplyImport(previewVm, repo, repo.GetAll());
+
+        if (DataContext is PresetManagementViewModel vm)
+            vm.LoadPresets();
+    }
+};
+```
+
+-----
+
+## 9.8 DI 登録
+
+```csharp
+// App.axaml.cs の ConfigureServices に追加
+services.AddSingleton<IPresetExchangeService, PresetExchangeService>();
+```
+
+-----
+
+## 9.9 動作確認
+
+### エクスポート
+
+1. 管理画面で 1 件選択 →「エクスポート」→ `.json` で保存
+1. 保存された JSON ファイルの中身を確認（`id` が含まれないこと）
+1. 複数選択 →「エクスポート」→ `.zip` で保存
+1. ZIP の中に複数の `.json` が含まれることを確認
+
+### インポート
+
+1. エクスポートした `.json` をインポート（新規追加）
+1. 同名プリセットが存在する状態でインポート → 競合解決画面が表示
+1. 「名前変更して追加」で重複名に連番が付く
+1. 「上書き」で既存プリセットが更新される
+1. 「スキップ」でインポートされない
+
+### エッジケース
+
+1. 壊れた JSON ファイルをインポート → 警告が表示される
+1. 空の ZIP をインポート → 「プリセットが見つかりません」エラー
+1. 将来のスキーマバージョン（手動で `schemaVersion: 2` に変更）
+   → バージョン警告が表示される
+
+-----
+
+## 9.10 Git コミット
+
+```bash
+git add .
+git commit -m "Phase 9: プリセットのインポート・エクスポート（競合解決含む）"
+```
+
+-----
+
+## 動作確認チェックリスト
+
+- [ ] 1 件のプリセットを `.json` でエクスポートできる
+- [ ] 複数のプリセットを `.zip` でエクスポートできる
+- [ ] エクスポートした JSON に `id` が含まれない
+- [ ] `.json` からインポートできる
+- [ ] `.zip` からインポートできる
+- [ ] 名前重複時に競合解決画面が表示される
+- [ ] 「名前変更して追加」が正しく動作する
+- [ ] 「上書き」が正しく動作する
+- [ ] 「スキップ」が正しく動作する
+- [ ] 壊れたファイルで警告が出る
+- [ ] バージョン警告が出る
+
+-----
+
+## 全フェーズ完了
+
+これで CSV 分類ツールの主要機能がすべて揃った。
+
+### 今後の改善候補
+
+- **エンコーディング自動判定**: Shift_JIS / UTF-8 BOM / UTF-8 の自動判定
+- **プレビュー機能**: 先頭 N 行を DataGrid で表示してからフィルタ適用確認
+- **ルールの外部定義化**: SharePoint 上の Excel からフィルタルールを読み込む
+- **ログファイル出力**: 処理結果を `.log` ファイルに残す
+- **自動テスト**: xUnit + モック（ICsvProcessor / IPresetRepository）
+- **AOT 発行**: `dotnet publish -p:PublishAot=true` での動作確認
+- **Mac 対応テスト**: `.app` バンドル化 + Gatekeeper 対応
