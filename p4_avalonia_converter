@@ -1,0 +1,468 @@
+# Phase 4: CSV 処理コア（UI なしで動かす）
+
+## ゴール
+
+CSV を読み込み、フィルタで行を除外し、分類列の値ごとに別ファイルに書き出すロジックが、
+コンソールで単体動作する状態。
+
+-----
+
+## 4.1 データモデル定義
+
+```csharp
+// Models/FilterRule.cs
+namespace CsvTool.App.Models;
+
+public enum FilterOp
+{
+    Equals,       // 等しい
+    NotEquals,    // 等しくない
+    Contains,     // 含む
+    NotContains,  // 含まない
+    LessThan,     // 未満
+    IsEmpty       // 空である
+}
+
+public record FilterRule(
+    string Column,
+    FilterOp Op,
+    string Value);
+```
+
+```csharp
+// Models/ProcessRequest.cs
+namespace CsvTool.App.Models;
+
+public record ProcessRequest(
+    string InputPath,
+    string OutputDir,
+    string CategoryColumn,
+    IReadOnlyList<FilterRule> Filters,
+    string OutputFileNamePattern);
+```
+
+```csharp
+// Models/ProcessResult.cs
+namespace CsvTool.App.Models;
+
+public record CategoryResult(string CategoryName, int RowCount, string FilePath);
+
+public record ProcessResult(
+    int TotalRows,
+    int FilteredRows,
+    int OutputRows,
+    IReadOnlyList<CategoryResult> Categories,
+    TimeSpan Elapsed);
+```
+
+```csharp
+// Models/ProgressInfo.cs
+namespace CsvTool.App.Models;
+
+public record ProgressInfo(
+    int ProcessedRows,
+    int TotalRows,
+    string Message);
+```
+
+-----
+
+## 4.2 フィルタ判定ロジック
+
+```csharp
+// Services/FilterEvaluator.cs
+using CsvTool.App.Models;
+
+namespace CsvTool.App.Services;
+
+public static class FilterEvaluator
+{
+    /// <summary>
+    /// いずれかのフィルタに一致する場合 true（= 除外対象）
+    /// </summary>
+    public static bool ShouldExclude(
+        IReadOnlyList<FilterRule> filters,
+        Func<string, string> getColumnValue)
+    {
+        foreach (var filter in filters)
+        {
+            var value = getColumnValue(filter.Column);
+            if (Matches(filter, value))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool Matches(FilterRule filter, string cellValue)
+    {
+        return filter.Op switch
+        {
+            FilterOp.Equals      => string.Equals(cellValue, filter.Value,
+                                        StringComparison.Ordinal),
+            FilterOp.NotEquals   => !string.Equals(cellValue, filter.Value,
+                                        StringComparison.Ordinal),
+            FilterOp.Contains    => cellValue.Contains(filter.Value,
+                                        StringComparison.Ordinal),
+            FilterOp.NotContains => !cellValue.Contains(filter.Value,
+                                        StringComparison.Ordinal),
+            FilterOp.LessThan   => double.TryParse(cellValue, out var num)
+                                   && double.TryParse(filter.Value, out var threshold)
+                                   && num < threshold,
+            FilterOp.IsEmpty     => string.IsNullOrWhiteSpace(cellValue),
+            _ => false
+        };
+    }
+}
+```
+
+-----
+
+## 4.3 CSV プロセッサ本体
+
+```csharp
+// Services/ICsvProcessor.cs
+using CsvTool.App.Models;
+
+namespace CsvTool.App.Services;
+
+public interface ICsvProcessor
+{
+    Task<ProcessResult> ProcessAsync(
+        ProcessRequest request,
+        IProgress<ProgressInfo>? progress = null,
+        CancellationToken cancellationToken = default);
+}
+```
+
+```csharp
+// Services/CsvProcessor.cs
+using System.Diagnostics;
+using System.Text;
+using CsvTool.App.Models;
+using nietras.SeparatedValues; // Sep の名前空間
+
+namespace CsvTool.App.Services;
+
+public class CsvProcessor : ICsvProcessor
+{
+    // 進捗通知の間引き間隔
+    private const int ProgressReportInterval = 5000;
+
+    public async Task<ProcessResult> ProcessAsync(
+        ProcessRequest request,
+        IProgress<ProgressInfo>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return await Task.Run(() =>
+            ProcessCore(request, progress, cancellationToken),
+            cancellationToken);
+    }
+
+    private ProcessResult ProcessCore(
+        ProcessRequest request,
+        IProgress<ProgressInfo>? progress,
+        CancellationToken cancellationToken)
+    {
+        var sw = Stopwatch.StartNew();
+
+        // 出力先フォルダ作成
+        Directory.CreateDirectory(request.OutputDir);
+
+        // 入力ファイルの総行数を事前カウント（進捗計算用）
+        var totalRows = CountLines(request.InputPath) - 1; // ヘッダー除く
+        progress?.Report(new ProgressInfo(0, totalRows,
+            $"総行数: {totalRows:#,0}"));
+
+        // Sep で読み込み
+        using var reader = Sep.Reader().FromFile(request.InputPath);
+
+        // ヘッダー取得
+        var header = reader.Header;
+        var headerLine = string.Join(",",
+            Enumerable.Range(0, header.ColNames.Count)
+                .Select(i => header.ColNames[i]));
+
+        // 分類列のインデックスを事前取得
+        var categoryColIndex = header.IndexOf(request.CategoryColumn);
+
+        // カテゴリ別のライター管理
+        var writers = new Dictionary<string, StreamWriter>();
+        var categoryCounts = new Dictionary<string, int>();
+
+        var processedRows = 0;
+        var filteredRows = 0;
+
+        try
+        {
+            foreach (var row in reader)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                processedRows++;
+
+                // フィルタ判定
+                if (FilterEvaluator.ShouldExclude(request.Filters,
+                    col => row[col].ToString()))
+                {
+                    filteredRows++;
+                    ReportProgress(progress, processedRows, totalRows);
+                    continue;
+                }
+
+                // カテゴリ取得
+                var category = row[categoryColIndex].ToString();
+                if (string.IsNullOrEmpty(category))
+                    category = "_empty";
+
+                // ライターを取得 or 新規作成
+                if (!writers.TryGetValue(category, out var writer))
+                {
+                    var fileName = request.OutputFileNamePattern
+                        .Replace("{category}", SanitizeFileName(category));
+                    var filePath = Path.Combine(request.OutputDir, fileName);
+
+                    writer = new StreamWriter(filePath, false, Encoding.UTF8);
+                    writer.WriteLine(headerLine);
+                    writers[category] = writer;
+                    categoryCounts[category] = 0;
+                }
+
+                // 行を書き出し
+                var line = string.Join(",",
+                    Enumerable.Range(0, header.ColNames.Count)
+                        .Select(i => EscapeCsvField(row[i].ToString())));
+                writer.WriteLine(line);
+                categoryCounts[category]++;
+
+                ReportProgress(progress, processedRows, totalRows);
+            }
+        }
+        finally
+        {
+            // すべてのライターを確実に閉じる
+            foreach (var writer in writers.Values)
+            {
+                writer.Dispose();
+            }
+        }
+
+        sw.Stop();
+
+        // 結果を組み立て
+        var categories = categoryCounts
+            .OrderByDescending(kv => kv.Value)
+            .Select(kv => new CategoryResult(
+                kv.Key,
+                kv.Value,
+                Path.Combine(request.OutputDir,
+                    request.OutputFileNamePattern
+                        .Replace("{category}", SanitizeFileName(kv.Key)))))
+            .ToList();
+
+        return new ProcessResult(
+            TotalRows: processedRows,
+            FilteredRows: filteredRows,
+            OutputRows: processedRows - filteredRows,
+            Categories: categories,
+            Elapsed: sw.Elapsed);
+    }
+
+    private void ReportProgress(
+        IProgress<ProgressInfo>? progress,
+        int processedRows,
+        int totalRows)
+    {
+        if (progress == null) return;
+        if (processedRows % ProgressReportInterval != 0
+            && processedRows != totalRows) return;
+
+        progress.Report(new ProgressInfo(
+            processedRows, totalRows,
+            $"{processedRows:#,0} / {totalRows:#,0} 行処理済み"));
+    }
+
+    private static int CountLines(string filePath)
+    {
+        var count = 0;
+        using var reader = new StreamReader(filePath);
+        while (reader.ReadLine() != null) count++;
+        return count;
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        return string.Concat(name.Select(c =>
+            invalid.Contains(c) ? '_' : c));
+    }
+
+    private static string EscapeCsvField(string field)
+    {
+        if (field.Contains(',') || field.Contains('"')
+            || field.Contains('\n') || field.Contains('\r'))
+        {
+            return $"\"{field.Replace("\"", "\"\"")}\"";
+        }
+        return field;
+    }
+}
+```
+
+-----
+
+## 4.4 ダミー CSV 生成スクリプト
+
+テスト用に 100 万行の CSV を生成する。
+コンソールプロジェクトで実行するか、`dotnet-script` 等で実行:
+
+```csharp
+// テスト用。Program.cs の先頭に一時的に書いてもよい
+using System.Text;
+
+var random = new Random(42);
+var categories = new[] { "A", "B", "C", "D" };
+var statuses = new[] { "有効", "有効", "有効", "有効", "削除済み", "保留" };
+var regions = new[] { "関東", "関西", "中部", "北海道", "九州" };
+
+var path = "test_1M.csv";
+using var writer = new StreamWriter(path, false, Encoding.UTF8);
+writer.WriteLine("id,name,category,status,region,amount,date");
+
+for (var i = 1; i <= 1_000_000; i++)
+{
+    var cat = categories[random.Next(categories.Length)];
+    var status = statuses[random.Next(statuses.Length)];
+    var region = regions[random.Next(regions.Length)];
+    var amount = random.Next(-1000, 100000);
+    var date = DateTime.Today.AddDays(-random.Next(0, 365))
+        .ToString("yyyy-MM-dd");
+    writer.WriteLine($"{i},テストユーザー{i},{cat},{status},{region},{amount},{date}");
+}
+
+Console.WriteLine($"生成完了: {path}");
+```
+
+-----
+
+## 4.5 コンソールでの動作確認
+
+`Program.cs` に一時的にテストコードを追加する（Phase 完了後に削除）:
+
+```csharp
+// 一時的なテストコード
+var processor = new CsvProcessor();
+
+var request = new ProcessRequest(
+    InputPath: "test_1M.csv",
+    OutputDir: "output",
+    CategoryColumn: "category",
+    Filters: new[]
+    {
+        new FilterRule("status", FilterOp.Equals, "削除済み"),
+        new FilterRule("amount", FilterOp.LessThan, "0"),
+    },
+    OutputFileNamePattern: "data_{category}.csv");
+
+var progress = new Progress<ProgressInfo>(info =>
+    Console.WriteLine($"[{info.ProcessedRows:#,0}/{info.TotalRows:#,0}] {info.Message}"));
+
+var result = await processor.ProcessAsync(request, progress);
+
+Console.WriteLine($"\n=== 処理完了 ===");
+Console.WriteLine($"入力:   {result.TotalRows:#,0} 行");
+Console.WriteLine($"除外:   {result.FilteredRows:#,0} 行");
+Console.WriteLine($"出力:   {result.OutputRows:#,0} 行");
+Console.WriteLine($"所要時間: {result.Elapsed.TotalSeconds:F1} 秒");
+Console.WriteLine($"\n分類別:");
+foreach (var cat in result.Categories)
+{
+    Console.WriteLine($"  {cat.CategoryName}: {cat.RowCount:#,0} 行 → {cat.FilePath}");
+}
+```
+
+-----
+
+## 4.6 性能目安
+
+100 万行 × 7 列の CSV（約 40MB）の場合:
+
+|項目         |目安     |
+|-----------|-------|
+|行数カウント     |0.5〜1 秒|
+|フィルタ + 分割出力|3〜8 秒  |
+|合計         |5〜10 秒 |
+
+10 秒以上かかる場合は以下を疑う:
+
+- SSD ではなく HDD（I/O ボトルネック）
+- ウイルス対策ソフトがリアルタイムスキャンしている
+- 列数が極端に多い
+
+-----
+
+## 4.7 DI への登録（Phase 5 準備）
+
+`App.axaml.cs` の `ConfigureServices` に追加しておく:
+
+```csharp
+services.AddSingleton<ICsvProcessor, CsvProcessor>();
+```
+
+-----
+
+## 4.8 Git コミット
+
+```bash
+git add .
+git commit -m "Phase 4: CSV 処理コアロジック（フィルタ + 分類別分割）"
+```
+
+-----
+
+## 動作確認チェックリスト
+
+- [ ] ダミー CSV（100 万行）を生成できた
+- [ ] コンソールで `CsvProcessor` を実行できた
+- [ ] フィルタにより「削除済み」と「マイナス金額」の行が除外された
+- [ ] 分類別（A / B / C / D）に別ファイルが出力された
+- [ ] 各出力ファイルにヘッダー行がある
+- [ ] 処理時間が 10 秒以内に収まっている
+- [ ] 進捗がコンソールに出力されている
+
+-----
+
+## 注意事項
+
+### Sep の名前空間
+
+Sep の using は `using nietras.SeparatedValues;`。
+パッケージ名 (`Sep`) と名前空間が異なるので注意。
+
+### CSV のエスケープ
+
+今回の実装では簡易的な CSV エスケープを自前で書いている。
+運用上、フィールド内にカンマ・改行・ダブルクォートが入るデータがある場合は
+十分にテストすること。
+
+将来的に `CsvHelper` に切り替える選択肢もある（書き込み側が充実）。
+
+### Shift_JIS 対応
+
+UTF-8 以外のファイルを読む場合は、`Encoding.RegisterProvider` が必要:
+
+```csharp
+Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+using var reader = Sep.Reader(o => o with { ... })
+    .FromFile(path);
+// Sep のエンコーディング指定は制限があるため、
+// Shift_JIS が必須なら StreamReader 経由で渡す方法も検討。
+```
+
+エンコーディング自動判定は Phase 9 以降の改善タスクとして残して良い。
+
+-----
+
+## 次のフェーズへ
+
+Phase 5 では、この処理コアをメイン画面の UI と接続し、
+進捗バー・キャンセル・結果サマリの表示を実装する。
