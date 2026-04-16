@@ -1,0 +1,482 @@
+# Phase 5: メイン画面と処理の接続（進捗・キャンセル）
+
+## ゴール
+
+実行ボタン押下 → 進捗バー表示 → キャンセル可能 → 結果サマリ表示が動く状態。
+
+-----
+
+## 5.1 MainWindowViewModel の拡張
+
+```csharp
+// ViewModels/MainWindowViewModel.cs
+using System.Collections.ObjectModel;
+using Avalonia.Controls;
+using Avalonia.Platform.Storage;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using CsvTool.App.Models;
+using CsvTool.App.Services;
+
+namespace CsvTool.App.ViewModels;
+
+public partial class MainWindowViewModel : ViewModelBase
+{
+    private readonly ICsvProcessor _csvProcessor;
+    private CancellationTokenSource? _cts;
+
+    public MainWindowViewModel(ICsvProcessor csvProcessor)
+    {
+        _csvProcessor = csvProcessor;
+    }
+
+    // --- 基本プロパティ ---
+
+    [ObservableProperty]
+    private string _title = "CSV分類ツール v0.1";
+
+    [ObservableProperty]
+    private string _inputPath = string.Empty;
+
+    [ObservableProperty]
+    private string _outputPath = string.Empty;
+
+    [ObservableProperty]
+    private string _statusText = "準備完了";
+
+    // --- プリセット（Phase 6 まではハードコード） ---
+
+    [ObservableProperty]
+    private string _selectedPresetName = "2026Q1 売上データ分類";
+
+    [ObservableProperty]
+    private string _presetDescription = "月次売上CSVから削除済みを除外し、地域別に分割";
+
+    // ハードコードのフィルタ（Phase 6 でプリセットから取得に変更）
+    private readonly List<FilterRule> _currentFilters = new()
+    {
+        new FilterRule("status", FilterOp.Equals, "削除済み"),
+        new FilterRule("amount", FilterOp.LessThan, "0"),
+    };
+    private string _categoryColumn = "category";
+    private string _outputPattern = "data_{category}.csv";
+
+    // --- 実行状態 ---
+
+    [ObservableProperty]
+    private bool _isRunning;
+
+    [ObservableProperty]
+    private int _progressPercent;
+
+    [ObservableProperty]
+    private string _progressText = string.Empty;
+
+    [ObservableProperty]
+    private ProcessResult? _lastResult;
+
+    [ObservableProperty]
+    private ObservableCollection<LogEntry> _logEntries = new();
+
+    // --- CanExecute ---
+
+    public bool CanExecute =>
+        !string.IsNullOrWhiteSpace(InputPath) &&
+        !string.IsNullOrWhiteSpace(OutputPath) &&
+        !IsRunning;
+
+    partial void OnInputPathChanged(string value)
+    {
+        ExecuteCommand.NotifyCanExecuteChanged();
+    }
+    partial void OnOutputPathChanged(string value)
+    {
+        ExecuteCommand.NotifyCanExecuteChanged();
+    }
+    partial void OnIsRunningChanged(bool value)
+    {
+        ExecuteCommand.NotifyCanExecuteChanged();
+        CancelCommand.NotifyCanExecuteChanged();
+    }
+
+    // --- コマンド ---
+
+    [RelayCommand]
+    private async Task BrowseInputFile(Window window)
+    {
+        var result = await window.StorageProvider.OpenFilePickerAsync(
+            new FilePickerOpenOptions
+            {
+                Title = "入力CSVファイルを選択",
+                AllowMultiple = false,
+                FileTypeFilter = new[]
+                {
+                    new FilePickerFileType("CSVファイル")
+                        { Patterns = new[] { "*.csv" } },
+                    FilePickerFileTypes.All
+                }
+            });
+
+        if (result.Count > 0)
+            InputPath = result[0].Path.LocalPath;
+    }
+
+    [RelayCommand]
+    private async Task BrowseOutputFolder(Window window)
+    {
+        var result = await window.StorageProvider.OpenFolderPickerAsync(
+            new FolderPickerOpenOptions
+            {
+                Title = "出力先フォルダを選択",
+                AllowMultiple = false
+            });
+
+        if (result.Count > 0)
+            OutputPath = result[0].Path.LocalPath;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanExecute))]
+    private async Task Execute()
+    {
+        IsRunning = true;
+        ProgressPercent = 0;
+        ProgressText = string.Empty;
+        LastResult = null;
+        LogEntries.Clear();
+
+        AddLog("処理を開始しました");
+        AddLog($"入力: {InputPath}");
+        AddLog($"出力先: {OutputPath}");
+
+        _cts = new CancellationTokenSource();
+
+        var request = new ProcessRequest(
+            InputPath: InputPath,
+            OutputDir: OutputPath,
+            CategoryColumn: _categoryColumn,
+            Filters: _currentFilters,
+            OutputFileNamePattern: _outputPattern);
+
+        // IProgress<T> は SynchronizationContext を自動キャプチャする
+        var progress = new Progress<ProgressInfo>(info =>
+        {
+            if (info.TotalRows > 0)
+                ProgressPercent = (int)((long)info.ProcessedRows * 100
+                    / info.TotalRows);
+            ProgressText = info.Message;
+        });
+
+        try
+        {
+            var result = await _csvProcessor.ProcessAsync(
+                request, progress, _cts.Token);
+
+            LastResult = result;
+            AddLog($"完了: {result.OutputRows:#,0}行出力 / " +
+                   $"{result.FilteredRows:#,0}行除外 " +
+                   $"({result.Elapsed.TotalSeconds:F1}秒)", "success");
+            StatusText = $"処理完了 ({result.Elapsed.TotalSeconds:F1}秒)";
+        }
+        catch (OperationCanceledException)
+        {
+            AddLog("処理がキャンセルされました", "warning");
+            StatusText = "キャンセル済み";
+        }
+        catch (Exception ex)
+        {
+            AddLog($"エラー: {ex.Message}", "error");
+            StatusText = "エラーが発生しました";
+        }
+        finally
+        {
+            IsRunning = false;
+            _cts?.Dispose();
+            _cts = null;
+        }
+    }
+
+    [RelayCommand]
+    private void Cancel()
+    {
+        _cts?.Cancel();
+        AddLog("キャンセルを要求しました...");
+    }
+
+    // --- ヘルパー ---
+
+    private void AddLog(string message, string type = "info")
+    {
+        LogEntries.Add(new LogEntry(
+            DateTime.Now.ToString("HH:mm:ss"),
+            message,
+            type));
+    }
+}
+
+// ログエントリ
+public record LogEntry(string Time, string Message, string Type);
+```
+
+-----
+
+## 5.2 メイン画面 AXAML に進捗・結果・ログを追加
+
+Phase 3 の AXAML に以下のセクションを **実行ボタンの下** に追加:
+
+```xml
+<!-- 進捗バー -->
+<Border IsVisible="{Binding IsRunning}"
+        Background="#EFF6FF"
+        BorderBrush="#BFDBFE"
+        BorderThickness="1"
+        CornerRadius="8"
+        Padding="16">
+    <StackPanel Spacing="8">
+        <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Text="{Binding ProgressText}"
+                       FontSize="12"
+                       Foreground="#525252" />
+            <TextBlock Grid.Column="1"
+                       Text="{Binding ProgressPercent, StringFormat={}{0}%}"
+                       FontSize="12"
+                       Foreground="#525252" />
+        </Grid>
+        <ProgressBar Value="{Binding ProgressPercent}"
+                     Maximum="100"
+                     Height="8" />
+        <Button Content="キャンセル"
+                Command="{Binding CancelCommand}"
+                HorizontalAlignment="Right"
+                Padding="12,4"
+                FontSize="12" />
+    </StackPanel>
+</Border>
+
+<!-- 結果サマリ -->
+<Border IsVisible="{Binding LastResult, Converter={x:Static ObjectConverters.IsNotNull}}"
+        Background="#F0FDF4"
+        BorderBrush="#BBF7D0"
+        BorderThickness="1"
+        CornerRadius="8"
+        Padding="16">
+    <StackPanel Spacing="8">
+        <TextBlock Text="処理結果"
+                   FontWeight="SemiBold"
+                   FontSize="14"
+                   Foreground="#166534" />
+        <Grid ColumnDefinitions="*,*,*" RowDefinitions="Auto,Auto">
+            <!-- 入力 -->
+            <Border Background="White" CornerRadius="4" Padding="8" Margin="0,0,4,0">
+                <StackPanel>
+                    <TextBlock Text="入力" FontSize="11" Foreground="#737373" />
+                    <TextBlock Text="{Binding LastResult.TotalRows, StringFormat='{}{0:#,0}'}"
+                               FontSize="18" FontWeight="SemiBold" />
+                </StackPanel>
+            </Border>
+            <!-- 除外 -->
+            <Border Grid.Column="1" Background="White" CornerRadius="4"
+                    Padding="8" Margin="2,0">
+                <StackPanel>
+                    <TextBlock Text="除外" FontSize="11" Foreground="#737373" />
+                    <TextBlock Text="{Binding LastResult.FilteredRows, StringFormat='{}{0:#,0}'}"
+                               FontSize="18" FontWeight="SemiBold" Foreground="#DC2626" />
+                </StackPanel>
+            </Border>
+            <!-- 出力 -->
+            <Border Grid.Column="2" Background="White" CornerRadius="4"
+                    Padding="8" Margin="4,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="出力" FontSize="11" Foreground="#737373" />
+                    <TextBlock Text="{Binding LastResult.OutputRows, StringFormat='{}{0:#,0}'}"
+                               FontSize="18" FontWeight="SemiBold" Foreground="#166534" />
+                </StackPanel>
+            </Border>
+        </Grid>
+        <!-- 分類別結果は ItemsControl で表示 -->
+        <ItemsControl ItemsSource="{Binding LastResult.Categories}">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <WrapPanel />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="models:CategoryResult">
+                    <Border Background="White" CornerRadius="4"
+                            Padding="8,4" Margin="0,4,4,0"
+                            BorderBrush="#BBF7D0" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="{Binding CategoryName}"
+                                       FontWeight="SemiBold" FontSize="12" />
+                            <TextBlock Text="{Binding RowCount, StringFormat='{}{0:#,0}行'}"
+                                       FontSize="12" Foreground="#737373" />
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </StackPanel>
+</Border>
+
+<!-- ログ -->
+<Border IsVisible="{Binding LogEntries.Count}"
+        Background="#171717"
+        CornerRadius="8"
+        Padding="12"
+        Height="140">
+    <ScrollViewer>
+        <ItemsControl ItemsSource="{Binding LogEntries}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:LogEntry">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="{Binding Time}"
+                                   FontFamily="Consolas,monospace"
+                                   FontSize="11"
+                                   Foreground="#737373" />
+                        <TextBlock Text="{Binding Message}"
+                                   FontFamily="Consolas,monospace"
+                                   FontSize="11"
+                                   Foreground="#D4D4D4" />
+                    </StackPanel>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </ScrollViewer>
+</Border>
+```
+
+> **名前空間の追加が必要**:
+> 
+> ```xml
+> xmlns:models="using:CsvTool.App.Models"
+> xmlns:vm="using:CsvTool.App.ViewModels"
+> ```
+
+-----
+
+## 5.3 実行ボタンの差し替え
+
+Phase 3 の単純な実行ボタンを、状態に応じて切り替えるようにする:
+
+```xml
+<!-- 実行 / キャンセル切り替え -->
+<Button IsVisible="{Binding !IsRunning}"
+        Content="実行"
+        Command="{Binding ExecuteCommand}"
+        HorizontalAlignment="Stretch"
+        HorizontalContentAlignment="Center"
+        Padding="16,10"
+        FontSize="14"
+        FontWeight="SemiBold"
+        Background="#2563EB"
+        Foreground="White"
+        CornerRadius="4" />
+
+<Button IsVisible="{Binding IsRunning}"
+        Content="キャンセル"
+        Command="{Binding CancelCommand}"
+        HorizontalAlignment="Stretch"
+        HorizontalContentAlignment="Center"
+        Padding="16,10"
+        FontSize="14"
+        FontWeight="SemiBold"
+        Background="#DC2626"
+        Foreground="White"
+        CornerRadius="4" />
+```
+
+-----
+
+## 5.4 進捗更新の間引きについて
+
+`CsvProcessor` の `ProgressReportInterval` を `5000` に設定している。
+
+- 1 行ごとに報告: UI が処理に追いつけずガタつく
+- 10,000 行ごと: 100万行で 100 回報告。滑らかさと負荷のバランスが良い
+- 5,000 行ごと: 200 回報告。やや細かいが十分許容範囲
+
+進捗が「カクカクする」場合は `ProgressReportInterval` を増やす。
+
+-----
+
+## 5.5 動作確認
+
+```bash
+dotnet run
+```
+
+1. Phase 4 で生成した `test_1M.csv` を入力に指定
+1. 出力先フォルダを指定
+1. 「実行」押下
+1. 進捗バーがリアルタイムに更新される
+1. 処理中に「キャンセル」を押すと停止する
+1. 完了後に結果サマリ（入力/除外/出力の行数、分類別内訳）が表示される
+1. ログにタイムスタンプ付きのメッセージが残る
+
+-----
+
+## 5.6 Git コミット
+
+```bash
+git add .
+git commit -m "Phase 5: メイン画面と処理の接続（進捗・キャンセル・結果表示）"
+```
+
+-----
+
+## 動作確認チェックリスト
+
+- [ ] 実行中に進捗バーが動く
+- [ ] キャンセルで処理が停止する
+- [ ] 結果サマリに正しい件数が表示される
+- [ ] 分類別にファイルが生成されている
+- [ ] ログに処理過程が記録されている
+- [ ] 処理中は実行ボタンが無効化（キャンセルボタンに切り替わる）
+- [ ] エラー時（存在しないパス指定など）にログにエラーメッセージが出る
+
+-----
+
+## つまずきポイント
+
+### 「進捗が動かない」
+
+`IProgress<T>` は `SynchronizationContext` をキャプチャするため、
+`new Progress<T>()` は **UI スレッドで生成** する必要がある。
+`Task.Run` の中で生成すると動かない。
+
+```csharp
+// OK: UI スレッドで生成してから Task.Run に渡す
+var progress = new Progress<ProgressInfo>(info => { ... });
+await _csvProcessor.ProcessAsync(request, progress, _cts.Token);
+
+// NG: Task.Run の中で生成
+await Task.Run(() => {
+    var progress = new Progress<ProgressInfo>(...); // ← ここでは動かない
+});
+```
+
+### 「キャンセルが効かない」
+
+`cancellationToken.ThrowIfCancellationRequested()` がループ内にあることを確認。
+また、I/O 待ち（ファイル書き込み）中はキャンセルが即座に効かないことがある。
+実用上は数秒以内に停止すれば問題ない。
+
+-----
+
+## この時点での状態
+
+**Phase 5 完了時点で、GUI ツールとして最低限動作する。**
+
+- CSV 入力 → フィルタ → 分類別分割 → 出力
+- 進捗表示、キャンセル対応
+- 処理結果の確認
+
+ここから先は「プリセット管理」機能の追加。
+急ぎの業務で使う必要があれば、Phase 5 の状態でフィルタ条件をハードコードで
+書き換えて運用することも可能。
+
+-----
+
+## 次のフェーズへ
+
+Phase 6 ではプリセットのデータモデルと JSON 永続化を実装し、
+ハードコードのフィルタ設定をプリセット選択に差し替える。
